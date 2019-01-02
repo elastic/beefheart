@@ -1,0 +1,72 @@
+name:                beefheart
+version:             0.1.0.0
+github:              "tylerjl/beefheart"
+license:             BSD3
+author:              "Tyler Langlois"
+maintainer:          "tyler@elastic.co"
+copyright:           "2018 Tyler Langlois"
+
+extra-source-files:
+- README.md
+
+# Metadata used when publishing your package
+# synopsis:            Short description of your package
+# category:            Web
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         Please see the README on GitHub at <https://github.com/tylerjl/beefheart#readme>
+
+dependencies:
+- aeson
+- base >= 4.7 && < 5
+- bloodhound
+- bytestring
+- classy-prelude
+- data-default
+- ekg
+- ekg-core
+- http-client
+- lens
+- mtl
+- optparse-applicative
+- req
+- scientific
+- time
+- unordered-containers
+
+library:
+  source-dirs: src
+  default-extensions:
+  - DataKinds
+  - DeriveGeneric
+  - FlexibleInstances
+  - NoImplicitPrelude
+  - OverloadedStrings
+
+executables:
+  beefheart:
+    main:                Main.hs
+    source-dirs:         app
+    default-extensions:
+    - NoImplicitPrelude
+    - OverloadedStrings
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    - -with-rtsopts=-T
+    dependencies:
+    - beefheart
+
+tests:
+  beefheart-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - beefheart
