@@ -57,6 +57,7 @@ executables:
     - -rtsopts
     - -with-rtsopts=-N
     - -with-rtsopts=-T
+    - -optP-Wno-nonportable-include-path
     dependencies:
     - beefheart
 
@@ -68,5 +69,6 @@ tests:
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
+    - -optP-Wno-nonportable-include-path
     dependencies:
     - beefheart
