@@ -128,7 +128,7 @@ instance ToJSON ServiceVersion
 
 -- |A well-structured datatype that we can pass into `fastlyReq`.
 data FastlyRequest = FastlyRequest
-                     { apiKey       :: String
+                     { apiKey       :: Text
                      , serviceId    :: Text
                      , timestampReq :: Maybe POSIXTime
                      , service      :: FastlyService

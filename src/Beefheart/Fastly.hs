@@ -36,4 +36,4 @@ fastlyReq requestPayload = do
               where ts = case timestampReq requestPayload of
                            Nothing -> "0"
                            Just theTime -> tshow $ floor theTime
-        options = header "Fastly-Key" $ B.pack $ apiKey requestPayload
+        options = header "Fastly-Key" $ encodeUtf8 $ apiKey requestPayload

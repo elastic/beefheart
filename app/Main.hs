@@ -1,3 +1,4 @@
+{-# LANGUAGE RecordWildCards #-}
 module Main where
 
 import Beefheart
@@ -9,12 +10,13 @@ import ClassyPrelude
 import Control.Concurrent
 import Data.Time.Clock.POSIX (POSIXTime)
 -- This is our Elasticsearch library.
-import Database.V5.Bloodhound hiding (name)
+import Database.V5.Bloodhound hiding (esUsername, esPassword, name)
 import qualified Network.HTTP.Client as HTTP
 import Network.HTTP.Req hiding (header)
 -- CLI option parsing.
 import Options.Applicative
-import System.Environment (lookupEnv)
+-- Environment variable parsing.
+import System.Envy hiding (Parser)
 import System.Exit
 -- EKG is a high-level process metrics collection and introspection library - by
 -- default, its interface will be available over http://localhost:8000 after
@@ -23,9 +25,27 @@ import qualified System.Metrics as EKG
 import qualified System.Metrics.Counter as Counter
 import qualified System.Remote.Monitoring as EKG
 
--- |What the expected environment variable is.
-apiKeyVariable :: String
-apiKeyVariable = "FASTLY_KEY"
+-- |Enumerates all the environment variables we expect.
+data EnvOptions = EnvOptions
+                  { fastlyKey  :: Text
+                  , esUsername :: Maybe Text
+                  , esPassword :: Maybe Text
+                  } deriving (Generic, Show)
+
+-- |Although `envy` does support deriving Generic, this and `ToEnv` are
+-- |explicitly defined because `Maybe a` support isn't quite as clean without
+-- |explicit typeclasses.
+instance FromEnv EnvOptions where
+  fromEnv = EnvOptions <$> env "FASTLY_KEY"
+                       <*> envMaybe "ES_USERNAME"
+                       <*> envMaybe "ES_PASSWORD"
+
+instance ToEnv EnvOptions where
+  toEnv EnvOptions {..} = makeEnv
+                          [ "FASTLY_KEY"  .= fastlyKey
+                          , "ES_USERNAME" .= esUsername
+                          , "ES_PASSWORD" .= esPassword
+                          ]
 
 -- |Command-line arguments are defined at the top-level as a well-defined type.
 data CliOptions = CliOptions
@@ -79,22 +99,34 @@ main = do
   -- Convenient, simple argument parser. This will short-circuit execution in
   -- the event of --help or missing required arguments.
   options <- execParser opts
-  -- Fetching an environment variable is an I/O action, do so here.
-  apiKey <- lookupEnv apiKeyVariable
+  -- Similar case for environment variables.
+  env <- decodeEnv :: IO (Either String EnvOptions)
 
-  case apiKey of
-    -- If there's an API key in the environment:
-    Just key -> do
+  case env of
+    -- `EnvOptions` only strictly requires a Fastly key, which is guaranteed
+    -- present if we make it this far.
+    Right vars -> do
       -- For convenience, we run EKG.
       metricsStore <- EKG.newStore
       EKG.registerGcMetrics metricsStore
       EKG.forkServerWith metricsStore "localhost" (metricsPort options)
 
+      -- We create a dedicated Bloodhound environment value here which lets us
+      -- potentially authenticate to Elasticsearch if those credentials are
+      -- present.
+      httpManager <- HTTP.newManager HTTP.defaultManagerSettings
+      let bhEnv' = mkBHEnv (elasticsearchUrl options) httpManager
+          bhEnv = case (esUsername vars, esPassword vars) of
+                    (Just u, Just p) ->
+                      bhEnv' { bhRequestHook = basicAuthHook (EsUsername u) (EsPassword p) }
+                    _ ->
+                      bhEnv'
+
       -- At this point our options are parsed and the API key is available, so
       -- start executing some IO actions:
       --
       -- Create any necessary index templates.
-      bootstrapElasticsearch (elasticsearchUrl options) (esIndex options)
+      bootstrapElasticsearch bhEnv (esIndex options)
 
       -- Map our Fastly/Elasticsearch IO over each Fastly service ID (in
       -- parallel). We don't ever expect the event loop to exit in normal
@@ -104,7 +136,7 @@ main = do
         counter <- EKG.createCounter ("requests-" <> service) metricsStore
         -- Fetch the service ID's details (to get the human-readable name)
         serviceDetails <- fastlyReq FastlyRequest
-          { apiKey = key
+          { apiKey = fastlyKey vars
           , timestampReq = Nothing
           , serviceId = service
           , service = ServiceAPI
@@ -113,14 +145,22 @@ main = do
           Left err -> return $ Left $ CustomAnalyticsError $ "Skipping service " <> service <> ": " <> tshow err
           Right resp -> do
             -- In this thread, enter the main event loop for the Fastly `service`
-            processAnalytics options (name $ responseBody resp) counter key Nothing service
+            processAnalytics
+              (esIndex options)
+              (fastlyKey vars)
+              bhEnv
+              (name $ responseBody resp)
+              counter
+              Nothing
+              service
+
       -- If this point is reached, it's safe to assume the infinite recursion
       -- returned prematurely, so print out the reason.
       print responses
 
     -- finding `Nothing` means the API key isn't present.
-    Nothing -> do
-      putStrLn $ "Error: missing key environment variable " <> pack apiKeyVariable
+    Left error -> do
+      putStrLn $ "Error: missing key environment variables: " <> tshow error
       exitFailure
 
   -- This is where we instantiate our option parser.
@@ -128,8 +168,8 @@ main = do
                ( fullDesc -- beefheart
                  <> progDesc
                   ( "Siphons Fastly real-time analytics to Elasticsearch."
-                 <> "Expects environment variable " <> apiKeyVariable <> " for authentication."
-                  )
+                 <> "Requires FASTLY_KEY environment variable for authentication "
+                 <> "and optional ES_USERNAME and ES_PASSWORD for Elasticsearch auth.")
                  <> header ( "a natural black angus beef heart slow-cooked in a "
                           <> "fiery sriracha honey wasabi BBQ sauce and set on "
                           <> "a rotating lazy Susan.")
@@ -156,14 +196,15 @@ data AnalyticsResponse = AnalyticsResponse POSIXTime BulkResponse
 
 -- |Accepts the requisite arguments to perform an analytics query and
 -- |Elasticsearch bulk index for a particular Fastly service.
-processAnalytics :: CliOptions      -- ^ Command-line options
+processAnalytics :: Text            -- ^ Index prefix
+                 -> Text            -- ^ Fastly API key
+                 -> BHEnv           -- ^ Bloodhound environment
                  -> Text            -- ^ Human-readable service name
                  -> Counter.Counter -- ^ EKG Counter to measure requests
-                 -> String          -- ^ Fastly API Key
                  -> Maybe POSIXTime -- ^ Timestamp for analytics request
                  -> Text            -- ^ Fastly Service ID
                  -> IO (Either AnalyticsError AnalyticsResponse) -- ^ Return either an error or response
-processAnalytics options serviceName counter key ts service = do
+processAnalytics prefix key bhEnv serviceName counter ts service = do
   -- Immediately prior to the Fastly request, hit the counter.
   Counter.inc counter
   -- Perform actual API call to Fastly asking for metrics for a service. A type
@@ -187,8 +228,8 @@ processAnalytics options serviceName counter key ts service = do
       -- Index these analytics into Elasticsearch.
       indexResponse <- indexAnalytics
                          serviceName
-                         (elasticsearchUrl options)
-                         (esIndex options)
+                         bhEnv
+                         prefix
                          response
 
       case indexResponse of
@@ -207,7 +248,7 @@ processAnalytics options serviceName counter key ts service = do
           -- invocation
           threadDelay (1 * 1000 * 1000)
           -- Recurse to continue the event loop.
-          processAnalytics options serviceName counter key (Just ts'') service
+          processAnalytics prefix key bhEnv serviceName counter (Just ts'') service
 
           -- Maybe for use later: how to return a successful request instead of
           -- recursing.

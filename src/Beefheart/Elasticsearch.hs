@@ -15,24 +15,22 @@ import           Network.HTTP.Client           (defaultManagerSettings)
 
 import Beefheart.Types
 
--- |A minor helper to wrap Bloodhound boilerplate
-runBH' es = withBH defaultManagerSettings es
--- |Also self-explanatory
+-- |Self-explanatory
 indexSettings = IndexSettings (ShardCount 2) (ReplicaCount 1)
 -- |Since we'll try and be forward-compatible, work with just one ES type of
 -- |`doc`
 mappingName = MappingName "doc"
 
 -- |Simple one-off to set up necessary ES indices
-bootstrapElasticsearch :: Server -- ^ ES endpoint
+bootstrapElasticsearch :: BHEnv  -- ^ Bloodhound environment
                        -> Text   -- ^ Index prefix to use for template
                        -> IO ()  -- ^ For now, just ignore results
 bootstrapElasticsearch es prefix = do
-  existing <- runBH' es $ templateExists templateName
+  existing <- runBH es $ templateExists templateName
   case existing of
     True -> pure ()
     False -> do
-      runBH' es $ do
+      runBH es $ do
         putTemplate template templateName
         pure ()
   where templateName = TemplateName "beefheart"
@@ -44,12 +42,12 @@ bootstrapElasticsearch es prefix = do
 -- |Main entrypoint for indexing `Analytics` values. Munges the value before
 -- |indexing in order to ensure it's well-formed for querying and visualization.
 indexAnalytics :: Text      -- ^ Human-readable service name
-               -> Server    -- ^ ES endpoint
+               -> BHEnv     -- ^ Bloodhound environment
                -> Text      -- ^ Index prefix
                -> Analytics -- ^ The response from Fastly we'd like to index
                -> IO (Either EsError BulkResponse) -- ^ Bulk request response
 indexAnalytics serviceName es prefix a = do
-  response <- runBH' es . bulk . fromList . map toOperation $ normalize a
+  response <- runBH es . bulk . fromList . map toOperation $ normalize a
   parseEsResponse response
   where indexSuffix = formatTime defaultTimeLocale "%Y.%m.%d" $ posixSecondsToUTCTime (timestamp a)
         indexName = IndexName $ prefix <> "-" <> fromString indexSuffix

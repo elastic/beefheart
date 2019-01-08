@@ -27,6 +27,7 @@ dependencies:
 - data-default
 - ekg
 - ekg-core
+- envy
 - http-client
 - lens
 - mtl
@@ -50,6 +51,7 @@ executables:
     main:                Main.hs
     source-dirs:         app
     default-extensions:
+    - DeriveGeneric
     - NoImplicitPrelude
     - OverloadedStrings
     ghc-options:
