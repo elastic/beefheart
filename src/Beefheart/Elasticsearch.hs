@@ -44,12 +44,14 @@ bootstrapElasticsearch es prefix = do
 indexAnalytics :: Text      -- ^ Human-readable service name
                -> BHEnv     -- ^ Bloodhound environment
                -> Text      -- ^ Index prefix
+               -> Text      -- ^ Index date pattern
                -> Analytics -- ^ The response from Fastly we'd like to index
                -> IO (Either EsError BulkResponse) -- ^ Bulk request response
-indexAnalytics serviceName es prefix a = do
+indexAnalytics serviceName es prefix datePattern a = do
   response <- runBH es . bulk . fromList . map toOperation $ normalize a
   parseEsResponse response
-  where indexSuffix = formatTime defaultTimeLocale "%Y.%m.%d" $ posixSecondsToUTCTime (timestamp a)
+  where indexSuffix = formatTime defaultTimeLocale date $ posixSecondsToUTCTime (timestamp a)
+        date = show datePattern
         indexName = IndexName $ prefix <> "-" <> fromString indexSuffix
         toOperation doc = BulkIndexAuto indexName mappingName doc
 

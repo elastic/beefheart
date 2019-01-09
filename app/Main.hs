@@ -51,6 +51,7 @@ instance ToEnv EnvOptions where
 data CliOptions = CliOptions
   { elasticsearchUrl :: Server -- ^ Where we'll index logs to.
   , esIndex          :: Text   -- ^ Index prefix for Elasticsearch documents.
+  , esDatePattern    :: Text   -- ^ Date pattern suffix for Elasticsearch indices
   , metricsPort      :: Int    -- ^ Optional port to expose metrics over.
   , services         :: [Text] -- ^ Which services to collect analytics for.
   }
@@ -68,6 +69,13 @@ cliOptions = CliOptions
       <> metavar "INDEX"
       <> showDefault
       <> value "fastly-metrics"
+    )
+  <*> strOption
+    ( long "date-pattern"
+      <> help "date pattern suffix for Elasticsearch index"
+      <> metavar "PATTERN"
+      <> showDefault
+      <> value "%Y.%m.%d"
     )
   -- How to parse the metrics port.
   <*> option auto
@@ -146,7 +154,7 @@ main = do
           Right resp -> do
             -- In this thread, enter the main event loop for the Fastly `service`
             processAnalytics
-              (esIndex options)
+              options
               (fastlyKey vars)
               bhEnv
               (name $ responseBody resp)
@@ -196,7 +204,7 @@ data AnalyticsResponse = AnalyticsResponse POSIXTime BulkResponse
 
 -- |Accepts the requisite arguments to perform an analytics query and
 -- |Elasticsearch bulk index for a particular Fastly service.
-processAnalytics :: Text            -- ^ Index prefix
+processAnalytics :: CliOptions      -- ^ Command-line options
                  -> Text            -- ^ Fastly API key
                  -> BHEnv           -- ^ Bloodhound environment
                  -> Text            -- ^ Human-readable service name
@@ -204,7 +212,7 @@ processAnalytics :: Text            -- ^ Index prefix
                  -> Maybe POSIXTime -- ^ Timestamp for analytics request
                  -> Text            -- ^ Fastly Service ID
                  -> IO (Either AnalyticsError AnalyticsResponse) -- ^ Return either an error or response
-processAnalytics prefix key bhEnv serviceName counter ts service = do
+processAnalytics opts key bhEnv serviceName counter ts service = do
   -- Immediately prior to the Fastly request, hit the counter.
   Counter.inc counter
   -- Perform actual API call to Fastly asking for metrics for a service. A type
@@ -229,7 +237,8 @@ processAnalytics prefix key bhEnv serviceName counter ts service = do
       indexResponse <- indexAnalytics
                          serviceName
                          bhEnv
-                         prefix
+                         (esIndex opts)
+                         (esDatePattern opts)
                          response
 
       case indexResponse of
@@ -248,7 +257,7 @@ processAnalytics prefix key bhEnv serviceName counter ts service = do
           -- invocation
           threadDelay (1 * 1000 * 1000)
           -- Recurse to continue the event loop.
-          processAnalytics prefix key bhEnv serviceName counter (Just ts'') service
+          processAnalytics opts key bhEnv serviceName counter (Just ts'') service
 
           -- Maybe for use later: how to return a successful request instead of
           -- recursing.
