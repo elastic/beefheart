@@ -7,13 +7,14 @@ import           ClassyPrelude
 import           Data.Aeson
 -- Aeson values are internally represented as `HashMap`s, which we import here
 -- in order to munge them a little bit later.
-import           Data.HashMap.Lazy      hiding (fromList, map)
+import           Data.HashMap.Lazy      hiding (filter, fromList, map)
 import qualified Data.HashMap.Lazy      as      HML
 import           Data.Time.Clock.POSIX
 import           Database.V5.Bloodhound hiding (Bucket)
 import           Network.HTTP.Client           (defaultManagerSettings)
 
 import Beefheart.Types
+import Beefheart.Utils
 
 -- |Self-explanatory
 indexSettings = IndexSettings (ShardCount 2) (ReplicaCount 1)
@@ -52,7 +53,7 @@ indexAnalytics serviceName es prefix datePattern a = do
   parseEsResponse response
   where indexSuffix = formatTime defaultTimeLocale date $ posixSecondsToUTCTime (timestamp a)
         date = show datePattern
-        indexName = IndexName $ prefix <> "-" <> fromString indexSuffix
+        indexName = IndexName $ prefix <> "-" <> pack (filter (/= '"') indexSuffix)
         toOperation doc = BulkIndexAuto indexName mappingName doc
 
         -- Here, `normalize` means taking an `Analytics` value and massaging it

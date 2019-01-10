@@ -143,7 +143,7 @@ main = do
         -- Create a metrics counter for this service.
         counter <- EKG.createCounter ("requests-" <> service) metricsStore
         -- Fetch the service ID's details (to get the human-readable name)
-        serviceDetails <- fastlyReq FastlyRequest
+        serviceDetails <- withRetries $ fastlyReq FastlyRequest
           { apiKey = fastlyKey vars
           , timestampReq = Nothing
           , serviceId = service
@@ -219,12 +219,12 @@ processAnalytics opts key bhEnv serviceName counter ts service = do
   -- hint is required here to ensure that `fastlyReq` knows what type of
   -- `JsonResponse` to return.
   metrics <-
-    ( fastlyReq FastlyRequest
-                { apiKey = key
-                , timestampReq = Just ts'
-                , serviceId = service
-                , service = AnalyticsAPI
-                } :: IO (Either HttpException (JsonResponse Analytics)))
+    ( withRetries $ fastlyReq FastlyRequest
+                    { apiKey = key
+                    , timestampReq = Just ts'
+                    , serviceId = service
+                    , service = AnalyticsAPI
+                    } :: IO (Either HttpException (JsonResponse Analytics)))
 
   -- `serviceAnalytics` behaves by returning a `Left` in case of unexpected
   -- behavior and `Right` in the event of success.
@@ -234,12 +234,12 @@ processAnalytics opts key bhEnv serviceName counter ts service = do
           ts'' = timestamp response       -- save the timestamp from the json response
 
       -- Index these analytics into Elasticsearch.
-      indexResponse <- indexAnalytics
-                         serviceName
-                         bhEnv
-                         (esIndex opts)
-                         (esDatePattern opts)
-                         response
+      indexResponse <- withRetries $ indexAnalytics
+                                       serviceName
+                                       bhEnv
+                                       (esIndex opts)
+                                       (esDatePattern opts)
+                                       response
 
       case indexResponse of
         -- An `EsError` indicates an unparseable result.

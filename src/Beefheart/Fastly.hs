@@ -29,11 +29,14 @@ fastlyReq :: (FromJSON a)
           => FastlyRequest
           -> IO (Either HttpException (JsonResponse a))
 fastlyReq requestPayload = do
-  runExceptT $ req GET url NoReqBody jsonResponse options
-  where url = case service requestPayload of
-                     AnalyticsAPI -> https "rt.fastly.com" /: "v1" /: "channel" /: (serviceId requestPayload) /: "ts" /: ts
-                     ServiceAPI -> https "api.fastly.com" /: "service" /: (serviceId requestPayload)
-              where ts = case timestampReq requestPayload of
-                           Nothing -> "0"
-                           Just theTime -> tshow $ floor theTime
-        options = header "Fastly-Key" $ encodeUtf8 $ apiKey requestPayload
+  runExceptT $ req GET (fastlyUrl requestPayload) NoReqBody jsonResponse options
+  where options = header "Fastly-Key" $ encodeUtf8 $ apiKey requestPayload
+
+fastlyUrl :: FastlyRequest -> Url 'Https
+fastlyUrl r@(FastlyRequest { service = AnalyticsAPI, timestampReq = t }) =
+  https "rt.fastly.com" /: "v1" /: "channel" /: (serviceId r) /: "ts" /: toTime t
+  where toTime Nothing        = "0"
+        toTime (Just theTime) = tshow $ floor theTime
+
+fastlyUrl r@(FastlyRequest { service = ServiceAPI }) =
+  https "api.fastly.com" /: "service" /: (serviceId r)

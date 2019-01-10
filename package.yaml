@@ -33,6 +33,7 @@ dependencies:
 - mtl
 - optparse-applicative
 - req
+- retry
 - scientific
 - time
 - unordered-containers
