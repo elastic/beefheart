@@ -1,6 +1,8 @@
 module Beefheart.Elasticsearch
     ( bootstrapElasticsearch
+    , encodeMetrics
     , indexAnalytics
+    , mappingName
     ) where
 
 import           ClassyPrelude
@@ -42,30 +44,12 @@ bootstrapElasticsearch es prefix = do
 
 -- |Main entrypoint for indexing `Analytics` values. Munges the value before
 -- |indexing in order to ensure it's well-formed for querying and visualization.
-indexAnalytics :: Text      -- ^ Human-readable service name
-               -> BHEnv     -- ^ Bloodhound environment
-               -> Text      -- ^ Index prefix
-               -> Text      -- ^ Index date pattern
-               -> Analytics -- ^ The response from Fastly we'd like to index
+indexAnalytics :: BHEnv           -- ^ Bloodhound environment
+               -> [BulkOperation] -- ^ List of operations to index
                -> IO (Either EsError BulkResponse) -- ^ Bulk request response
-indexAnalytics serviceName es prefix datePattern a = do
-  response <- runBH es . bulk . fromList . map toOperation $ normalize a
+indexAnalytics es operations = do
+  response <- runBH es . bulk . fromList $ operations
   parseEsResponse response
-  where indexSuffix = formatTime defaultTimeLocale date $ posixSecondsToUTCTime (timestamp a)
-        date = show datePattern
-        indexName = IndexName $ prefix <> "-" <> pack (filter (/= '"') indexSuffix)
-        toOperation doc = BulkIndexAuto indexName mappingName doc
-
-        -- Here, `normalize` means taking an `Analytics` value and massaging it
-        -- into the Aeson `Value` (or JSON) that we'd ultimately like it to be
-        -- represented as in Elasticsearch. Note that because each response from
-        -- Fastly includes an array of metrics from each `PointOfPresence`,
-        -- we'll get a list of `Value`s from one `Analytics` value here.
-        normalize analytics = fData analytics >>= toESDoc
-        -- Given a `Datacenter`, extract the list of metrics, and fold the
-        -- `HashMap` into a list of `Value`s.
-        toESDoc metrics = foldlWithKey' (encodeMetrics serviceName $ recorded metrics) []
-                          $ datacenter metrics
 
 -- |Function suitable to be passed to a `fold` (assuming that it's first
 -- |composed with a `POSIXTime`)

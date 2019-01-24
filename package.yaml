@@ -30,11 +30,13 @@ dependencies:
 - envy
 - http-client
 - lens
+- monad-loops
 - mtl
 - optparse-applicative
 - req
 - retry
 - scientific
+- stm
 - time
 - unordered-containers
 
