@@ -1,9 +1,11 @@
 module Beefheart.Utils
-  ( withRetries
+  ( sleepSeconds
+  , withRetries
   )
 where
 
 import ClassyPrelude
+import Control.Concurrent
 import Control.Retry
 import Data.Either
 
@@ -16,4 +18,9 @@ withRetries m = do
   where -- Initially wait one second, backoff exponentially, then concede to the
         -- impossibility of the request if retries reach 5 minutes.
         withPolicy = limitRetriesByDelay (60 * 5 * 1000 * 1000)
-                      $ exponentialBackoff (1 * 1000 * 1000)
+                     $ exponentialBackoff (1 * 1000 * 1000)
+
+-- |Sleep for a given number of seconds in a given thread.
+sleepSeconds :: Int   -- ^ Seconds to sleep
+             -> IO ()
+sleepSeconds = threadDelay . (*) (1000 * 1000)

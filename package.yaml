@@ -28,6 +28,7 @@ dependencies:
 - ekg
 - ekg-core
 - envy
+- exceptions
 - http-client
 - lens
 - monad-loops
@@ -48,6 +49,9 @@ library:
   - FlexibleInstances
   - NoImplicitPrelude
   - OverloadedStrings
+  ghc-options:
+  - -Wall
+  - -fno-warn-orphans
 
 executables:
   beefheart:
@@ -55,9 +59,11 @@ executables:
     source-dirs:         app
     default-extensions:
     - DeriveGeneric
+    - RecordWildCards
     - NoImplicitPrelude
     - OverloadedStrings
     ghc-options:
+    - -Wall
     - -threaded
     - -rtsopts
     - -with-rtsopts=-N
