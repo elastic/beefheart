@@ -81,5 +81,11 @@ tests:
     - -rtsopts
     - -with-rtsopts=-N
     - -optP-Wno-nonportable-include-path
+    default-extensions:
+    - NoImplicitPrelude
+    - OverloadedStrings
     dependencies:
     - beefheart
+    - docker
+    - tasty
+    - tasty-hunit
