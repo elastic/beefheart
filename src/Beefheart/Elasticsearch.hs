@@ -2,6 +2,7 @@ module Beefheart.Elasticsearch
     ( bootstrapElasticsearch
     , indexAnalytics
     , mappingName
+    , mergeAeson
     , toBulkOperations
     ) where
 
@@ -34,12 +35,10 @@ bootstrapElasticsearch
   -> m ()  -- ^ For now, just ignore results
 bootstrapElasticsearch es prefix = do
   existing <- runBH es $ templateExists templateName
-  case existing of
-    True -> pure ()
-    False -> do
-      runBH es $ do
-        _ <- putTemplate template templateName
-        pure ()
+  if existing then return () else
+    runBH es $ do
+      _ <- putTemplate template templateName
+      return ()
   where templateName = TemplateName "beefheart"
         template = IndexTemplate
                      (TemplatePattern $ prefix <> "*")
@@ -80,7 +79,7 @@ toBulkOperations prefix datePattern serviceName metrics = map toOperation . norm
                       $ datacenter metrics'
 
     -- Take an Aeson `Value` and put it into BulkOperation form.
-    toOperation doc = BulkIndexAuto indexName mappingName doc
+    toOperation = BulkIndexAuto indexName mappingName
     -- Note that `indexSuffix` might try to be _too_ helpful by quoting
     -- itself, which is why we filter out extraneous quotes.
     indexName = IndexName $ prefix <> "-" <> pack (filter (/= '"') indexSuffix)

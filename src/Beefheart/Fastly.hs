@@ -29,7 +29,7 @@ fastlyReq
   => FastlyRequest -- ^ We wrap various request parameters in a record to avoid
                    -- a massive function signature.
   -> m (Either HttpException (JsonResponse a))
-fastlyReq requestPayload = do
+fastlyReq requestPayload =
   runExceptT $ req GET (fastlyUrl requestPayload) NoReqBody jsonResponse options
   where options = header "Fastly-Key" $ encodeUtf8 $ apiKey requestPayload
 
@@ -41,13 +41,13 @@ fastlyUrl
 
 -- When we want to hit the real-time analytics API, interpolate the timestamp
 -- with the service ID.
-fastlyUrl (FastlyRequest { service = AnalyticsAPI, serviceId = id', timestampReq = t }) =
+fastlyUrl FastlyRequest { service = AnalyticsAPI, serviceId = id', timestampReq = t } =
   https "rt.fastly.com" /: "v1" /: "channel" /: id' /: "ts" /: toTime t
   where toTime Nothing        = "0"
         -- Failing to truncate/`floor` this time value can have weird effects (a
         -- POSIXTime isn't strictly a normal unix timestamp under the covers)
-        toTime (Just theTime) = tshow $ ((floor theTime) :: Int)
+        toTime (Just theTime) = tshow (floor theTime :: Int)
 
 -- Service API requests help us get details like human-readable name from the service.
-fastlyUrl (FastlyRequest { service = ServiceAPI, serviceId = id' }) =
+fastlyUrl FastlyRequest { service = ServiceAPI, serviceId = id' } =
   https "api.fastly.com" /: "service" /: id'

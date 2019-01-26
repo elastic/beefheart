@@ -225,7 +225,7 @@ metricsRunner ekg q indexPrefix datePattern key service = do
   counter <- EKG.createCounter (metricN $ "requests-" <> service) ekg
 
   -- Fetch the service ID's details (to get the human-readable name)
-  serviceDetails <- withRetries $ fastlyReq FastlyRequest
+  serviceDetails <- withRetries ifLeft $ fastlyReq FastlyRequest
     { apiKey       = key
     , timestampReq = Nothing
     , serviceId    = service
@@ -233,7 +233,7 @@ metricsRunner ekg q indexPrefix datePattern key service = do
     }
 
   case serviceDetails of
-    Left err -> do
+    Left err ->
       putStrLn $ "Skipping service " <> service <> ": " <> tshow err
     Right serviceDetailsResponse -> do
       -- Before entering the metrics fetching loop, record the service's details in EKG.
@@ -278,7 +278,7 @@ indexingRunner
   :: BHEnv                 -- ^ Bloodhound (Elasticsearch) env
   -> TBQueue BulkOperation -- ^ Queue to pull documents from
   -> IO b                  -- ^ Negligible return type
-indexingRunner bh q = do
+indexingRunner bh q =
   forever $ do
     -- See the comment on dequeueOperations for additional information, but
     -- tl;dr, we should always get _something_ from this action. Note that
@@ -319,7 +319,7 @@ fetchMetrics counter key service ts = do
   -- Immediately prior to the Fastly request, hit the counter.
   Counter.inc counter
   -- Perform actual API call to Fastly asking for metrics for a service.
-  withRetries $
+  withRetries ifLeft $
     fastlyReq FastlyRequest
               { apiKey = key
               , timestampReq = Just ts
