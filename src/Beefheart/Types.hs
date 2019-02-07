@@ -3,6 +3,7 @@
 module Beefheart.Types
   ( Analytics(..)
   , AnalyticsMapping(..)
+  , Bucket
   , BulkResponse(..)
   , Datacenter(..)
   , FastlyRequest(..)
@@ -172,12 +173,13 @@ data BulkItem =
   BulkItem
   { _id           :: Text
   , _index        :: Text
-  , _primary_term :: Int
-  , _seq_no       :: Int
-  , _shards       :: ShardStatus
+  , _primary_term :: Maybe Int
+  , _seq_no       :: Maybe Int
+  , _shards       :: Maybe ShardStatus
   , _type         :: Text
-  , _version      :: Int
-  , result        :: Text
+  , _version      :: Maybe Int
+  , error         :: Maybe BulkError
+  , result        :: Maybe Text
   , status        :: Int
   } deriving (Generic, Show)
 
@@ -193,6 +195,33 @@ data ShardStatus =
 
 instance FromJSON ShardStatus
 instance ToJSON ShardStatus
+
+data BulkError =
+  BulkError
+  { _type :: Text
+  , caused_by :: BulkErrorReason
+  , reason :: Text
+  } deriving (Generic, Show)
+
+instance FromJSON BulkError where
+  parseJSON = genericParseJSON $
+    defaultOptions { fieldLabelModifier = mungeType }
+instance ToJSON BulkError
+
+data BulkErrorReason =
+  BulkErrorReason
+  { _type :: Text
+  , reason :: Text
+  } deriving (Generic, Show)
+
+instance FromJSON BulkErrorReason where
+  parseJSON = genericParseJSON $
+    defaultOptions { fieldLabelModifier = mungeType }
+instance ToJSON BulkErrorReason
+
+mungeType :: String -> String
+mungeType "_type" = "type"
+mungeType s = s
 
 -- |Just a helper to define index mappings.
 data AnalyticsMapping = AnalyticsMapping deriving (Show)

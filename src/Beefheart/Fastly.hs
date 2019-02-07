@@ -25,7 +25,7 @@ instance (MonadIO m) => MonadHttp (ExceptT HttpException m) where
 -- The `req` library makes this fairly straightforward, and running it in
 -- `runExceptT` ensures any exceptions are caught within the `Either` monad.
 fastlyReq
-  :: (FromJSON a, MonadIO m) -- ^ The API returns JSON, so we expect something JSON-like
+  :: (FromJSON a , MonadIO m)
   => FastlyRequest -- ^ We wrap various request parameters in a record to avoid
                    -- a massive function signature.
   -> m (Either HttpException (JsonResponse a))

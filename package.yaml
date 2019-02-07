@@ -38,6 +38,7 @@ dependencies:
 - retry
 - scientific
 - stm
+- text
 - time
 - unordered-containers
 
@@ -69,6 +70,7 @@ executables:
     - -with-rtsopts=-N
     - -with-rtsopts=-T
     - -optP-Wno-nonportable-include-path
+    - -fno-warn-orphans
     dependencies:
     - beefheart
 
@@ -81,11 +83,18 @@ tests:
     - -rtsopts
     - -with-rtsopts=-N
     - -optP-Wno-nonportable-include-path
+    - -fno-warn-orphans
     default-extensions:
+    - FlexibleInstances
     - NoImplicitPrelude
     - OverloadedStrings
+    - TypeOperators
+    - TypeSynonymInstances
     dependencies:
     - beefheart
     - docker
+    - generic-random
+    - random
     - tasty
     - tasty-hunit
+    - tasty-quickcheck
