@@ -1,10 +1,10 @@
 name:                beefheart
 version:             0.1.0.0
-github:              "tylerjl/beefheart"
-license:             BSD3
-author:              "Tyler Langlois"
-maintainer:          "tyler@elastic.co"
-copyright:           "2018 Tyler Langlois"
+license:             Apache
+license-file:        LICENSE
+author:              "Elastic Infra Team"
+maintainer:          "infra@elastic.co"
+copyright:           "2019 Elasticsearch, Inc"
 
 extra-source-files:
 - README.md
