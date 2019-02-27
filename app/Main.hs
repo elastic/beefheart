@@ -11,6 +11,7 @@ import Control.Concurrent.STM.TBQueue
 import Control.Monad.STM
 import Control.Monad.Loops (iterateM_)
 import Data.Time.Clock.POSIX
+import GHC.Natural (intToNatural)
 -- This is our Elasticsearch library.
 import Database.V5.Bloodhound hiding (esUsername, esPassword, key, name)
 import qualified Network.HTTP.Client as HTTP
@@ -171,7 +172,11 @@ main = do
       -- us to funnel metrics in from Fastly while we pull them off the queue
       -- for bulk indexing, but small enough to not bloat memory and halt if ES
       -- experiences backpressure for some reason.
-      metricsQueue <- atomically $ newTBQueue 1000
+      --
+      -- In the absence of a perfect value, scale it roughly linearly with how
+      -- many services we're watching, with a hard cap to avoid blowing up
+      -- resident memory if we end up watching a /whole/ lot of services.
+      metricsQueue <- atomically $ newTBQueue $ ((*) 1000 . intToNatural) $ min (length $ services options) 100
 
       -- Spawn threads for each service which will fetch and queue up documents to be indexed.
       _metricsThreadIds <- forM (services options) $ \service ->
