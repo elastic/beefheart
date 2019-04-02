@@ -11,7 +11,7 @@ import Control.Concurrent.STM.TBQueue
 import Control.Monad.STM
 import Control.Monad.Loops (iterateM_)
 import Data.Time.Clock.POSIX
-import GHC.Natural (intToNatural)
+import GHC.Natural (Natural, intToNatural)
 -- This is our Elasticsearch library.
 import Database.V5.Bloodhound hiding (esUsername, esPassword, key, name)
 import qualified Network.HTTP.Client as HTTP
@@ -67,11 +67,17 @@ instance ToEnv EnvOptions where
 -- |Command-line arguments are defined at the top-level as a well-defined type.
 data CliOptions =
   CliOptions
-  { elasticsearchUrl :: Server -- ^ Where we'll index logs to.
-  , esIndex          :: Text   -- ^ Index prefix for Elasticsearch documents.
-  , esDatePattern    :: Text   -- ^ Date pattern suffix for Elasticsearch indices
-  , metricsPort      :: Int    -- ^ Optional port to expose metrics over.
-  , services         :: [Text] -- ^ Which services to collect analytics for.
+  { elasticsearchUrl   :: Server  -- ^ Where we'll index logs to.
+  , esFlushDelay       :: Int     -- ^ Period in seconds to sleep between bulk
+                                  -- indexing flushes to Elasticsearch
+  , esIndex            :: Text    -- ^ Index prefix for Elasticsearch documents.
+  , esDatePattern      :: Text    -- ^ Date pattern suffix for Elasticsearch indices
+  , fastlyBackoff      :: Int     -- ^ Seconds to sleep when encountering Fastly API errors.
+  , metricsPort        :: Int     -- ^ Optional port to expose metrics over.
+  , queueMetricsWakeup :: Int     -- ^ Period in seconds that the queue metrics thread will wakeup
+  , queueScalingFactor :: Natural -- ^ Factor applied to service count for metrics queue
+  , serviceScalingCap  :: Int     -- ^ A maximum value for how to scale the in-memory metrics document queue.
+  , services           :: [Text]  -- ^ Which services to collect analytics for.
   }
 
 -- |This is the actual parser that will be run over the executable's CLI
@@ -80,6 +86,14 @@ cliOptions :: Parser CliOptions -- ^ Defines each argument as a `Parser`
 cliOptions = CliOptions
   -- Parser we define later for the Elasticsearch URL.
   <$> serverOption
+  -- Parse seconds between bulk indexing events
+  <*> option auto
+    ( long "bulk-flush-period"
+      <> help "seconds between bulk indexing flushes"
+      <> metavar "SECONDS"
+      <> showDefault
+      <> value 10
+    )
   -- Simple `Text` argument for the index prefix.
   <*> strOption
     ( long "index-prefix"
@@ -96,6 +110,14 @@ cliOptions = CliOptions
       <> showDefault
       <> value "%Y.%m.%d"
     )
+  -- Parse the Fastly backoff seconds.
+  <*> option auto
+    ( long "fastly-backoff"
+      <> help "How many seconds to wait when backing off from Fastly API errors"
+      <> showDefault
+      <> value 60
+      <> metavar "SECONDS"
+    )
   -- How to parse the metrics port.
   <*> option auto
     ( long "metric-port"
@@ -103,6 +125,30 @@ cliOptions = CliOptions
       <> showDefault
       <> value 8000
       <> metavar "PORT"
+    )
+  -- How to parse the metrics thread wakeup period.
+  <*> option auto
+    ( long "metric-watcher-period"
+      <> help "Period (in seconds) in which EKG queue metrics should be polled"
+      <> showDefault
+      <> value 1
+      <> metavar "SECONDS"
+    )
+  -- Parse the multiplicative queue scaling factor
+  <*> option auto
+    ( long "queue-factor"
+      <> help "Number to multiply by service count to construct doc queue size"
+      <> showDefault
+      <> value 1000
+      <> metavar "FACTOR"
+    )
+  -- Parse the service queue scaling maximum.
+  <*> option auto
+    ( long "queue-service-scaling-max"
+      <> help "A maximum value for how to scale the in-memory metrics document queue"
+      <> showDefault
+      <> value 100
+      <> metavar "MAX"
     )
   -- Finally, some (>= 1) positional arguments for each Fastly service ID.
   <*> some (argument str (metavar "SERVICE <SERVICE> ..."))
@@ -176,20 +222,33 @@ main = do
       -- In the absence of a perfect value, scale it roughly linearly with how
       -- many services we're watching, with a hard cap to avoid blowing up
       -- resident memory if we end up watching a /whole/ lot of services.
-      metricsQueue <- atomically $ newTBQueue $ ((*) 1000 . intToNatural) $ min (length $ services options) 100
+      metricsQueue <- atomically $
+        newTBQueue
+          -- Scale that number up by a factor, because a service is comprised of
+          -- many endpoints.
+          $ ((*) (queueScalingFactor options) . intToNatural)
+          -- Find the smaller between how many Fastly services we want to watch
+          -- versus a hard limit.
+          $ min (length $ services options) (serviceScalingCap options)
 
       -- Spawn threads for each service which will fetch and queue up documents to be indexed.
       _metricsThreadIds <- forM (services options) $ \service ->
-        forkIO $ metricsRunner metricsStore metricsQueue (esIndex options) (esDatePattern options) (fastlyKey vars) service
+        forkIO $ metricsRunner metricsStore
+                               (fastlyBackoff options)
+                               metricsQueue
+                               (esIndex options)
+                               (esDatePattern options)
+                               (fastlyKey vars)
+                               service
 
       -- Spin up another thread to report our queue size metrics to EKG.
-      _watcherThreadId <- forkIO $ queueWatcher metricsStore metricsQueue
+      _watcherThreadId <- forkIO $ queueWatcher (queueMetricsWakeup options) metricsStore metricsQueue
 
       -- Finally, run our consumer to read metrics from the bounded queue in our
       -- main thread. Because we're already bulking index requests to
       -- Elasticsearch, there's not really a need to aggressively parallelize
       -- this.
-      indexingRunner bhEnv metricsQueue
+      indexingRunner bhEnv (esFlushDelay options) metricsQueue
 
   -- This is where we instantiate our option parser.
   where opts = info (cliOptions <**> helper)
@@ -205,27 +264,29 @@ main = do
 
 -- |Small utility to keep an eye on our bulk operations queue.
 queueWatcher
-  :: EKG.Store -- ^ EKG metrics
+  :: Int       -- ^ Period to sleep in between queue polling
+  -> EKG.Store -- ^ EKG metrics
   -> TBQueue a -- ^ Queue to watch
   -> IO b
-queueWatcher ekg q = do
+queueWatcher period ekg q = do
   gauge <- EKG.createGauge (metricN "metricsQueue") ekg
   forever $ do
     queueLength <- atomically $ lengthTBQueue q
     Gauge.set gauge $ fromIntegral queueLength
-    sleepSeconds 1
+    sleepSeconds period
 
 -- |Self-contained IO action to regularly fetch and queue up metrics for storage
 -- in Elasticsearch.
 metricsRunner
   :: EKG.Store             -- ^ EKG metrics
+  -> Int                   -- ^ Fastly API backoff factor
   -> TBQueue BulkOperation -- ^ Where we'll enqueue our ES docs
   -> Text                  -- ^ ES index prefix
   -> Text                  -- ^ ES index date pattern
   -> Text                  -- ^ Fastly API key
   -> Text                  -- ^ Fastly service ID
   -> IO ()                 -- ^ Negligible return type
-metricsRunner ekg q indexPrefix datePattern key service = do
+metricsRunner ekg backoff q indexPrefix datePattern key service = do
   -- Create a metrics counter for this service.
   counter <- EKG.createCounter (metricN $ "requests-" <> service) ekg
 
@@ -248,7 +309,7 @@ metricsRunner ekg q indexPrefix datePattern key service = do
       -- feeding the return value into the next iteration, which fits well with
       -- our use case: keep hitting Fastly and feed the previous timestamp into
       -- the next request.
-      iterateM_ (queueMetricsFor q toDocs getMetrics) 0
+      iterateM_ (queueMetricsFor backoff q toDocs getMetrics) 0
       where getMetrics = fetchMetrics counter key service
             toDocs = toBulkOperations indexPrefix datePattern serviceName
             serviceName = name $ responseBody serviceDetailsResponse
@@ -257,12 +318,13 @@ metricsRunner ekg q indexPrefix datePattern key service = do
 -- metrics retrieval loop. Get a timestamp, fetch some metrics for that
 -- timestamp, enqueue them, sleep, repeat.
 queueMetricsFor
-  :: TBQueue BulkOperation -- ^ Our application's metrics queue.
+  :: Int -- ^ API backoff factor
+  -> TBQueue BulkOperation -- ^ Our application's metrics queue.
   -> (Analytics -> [BulkOperation]) -- ^ A function to transform our metrics into ES bulk operations
   -> (POSIXTime -> IO (Either HttpException (JsonResponse Analytics))) -- ^ Function to get metrics for a timestamp
   -> POSIXTime -- ^ The actual metrics timestamp we want
   -> IO POSIXTime -- ^ Return the new POSIXTime for the subsequent request
-queueMetricsFor q f getter ts = do
+queueMetricsFor backoff q f getter ts = do
   response <- getter ts
   case response of
     Right metrics -> do
@@ -272,18 +334,19 @@ queueMetricsFor q f getter ts = do
     Left httpException -> do
       putStrLn
         ( "Error from Fastly: " <> tshow httpException <> ". "
-        <> "Easing off the API for a minute."
+        <> "Easing off the API for " <> tshow backoff <> " seconds."
         )
-      sleepSeconds 60
+      sleepSeconds backoff
       return ts
 
 -- |A self-contained indexing runner intended to be run within a thread. Wakes
 -- up periodically to bulk index documents that it finds in our queue.
 indexingRunner
   :: BHEnv                 -- ^ Bloodhound (Elasticsearch) env
+  -> Int                   -- ^ Seconds to sleep between bulk flushes
   -> TBQueue BulkOperation -- ^ Queue to pull documents from
   -> IO b                  -- ^ Negligible return type
-indexingRunner bh q =
+indexingRunner bh delay q =
   forever $ do
     -- See the comment on dequeueOperations for additional information, but
     -- tl;dr, we should always get _something_ from this action. Note that
@@ -293,9 +356,8 @@ indexingRunner bh q =
     case esResponse of
       Left esError -> print esError
       Right _ -> return ()
-    -- This is a somewhat arbitrary magic number - sleep for a time before
-    -- performing another bulk operation.
-    sleepSeconds 10
+    -- Sleep for a time before performing another bulk operation.
+    sleepSeconds delay
 
 -- |Flush Elasticsearch bulk operations that need to be indexed from our queue.
 dequeueOperations
