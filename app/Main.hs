@@ -214,7 +214,7 @@ main = do
       -- Queue to communicate between consumers and producers. Important to note
       -- that the queue is bounded to avoid consumer/producer deadlock problems.
       --
-      -- The actual queue size is a little arbitary - enough breathing room for
+      -- The actual queue size is a little arbitrary - enough breathing room for
       -- us to funnel metrics in from Fastly while we pull them off the queue
       -- for bulk indexing, but small enough to not bloat memory and halt if ES
       -- experiences backpressure for some reason.
