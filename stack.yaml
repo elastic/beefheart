@@ -17,7 +17,7 @@
 #
 # resolver: ./custom-snapshot.yaml
 # resolver: https://example.com/snapshots/2018-01-01.yaml
-resolver: lts-13.1
+resolver: lts-13.24
 
 # User packages to be built.
 # Various formats can be used as shown in the example below.
@@ -40,10 +40,6 @@ packages:
 extra-deps:
 - bloodhound-0.16.0.0@sha256:b7be3a83e7b914fbe80a9b9de29009ad60cff072f5f8d4af4ee64de8e6406d32
 - containers-0.5.11.0@sha256:28ad7337057442f75bc689315ab4ec7bdf5e6b2c39668f306672cecd82c02798
-- docker-0.6.0.0@sha256:1e2cdc9a59fe818b21a41eec0a73cc8f3ae80dade4a498de499670d6fc1bf715
-- ekg-0.4.0.15@sha256:f52d7c00654d72d2ab988255f30adba95a52484ac310bab9c136c64732e69f4b
-- ekg-json-0.1.0.6@sha256:4ff2e9cac213a5868ae8b4a7c72a16a9a76fac14d944ae819b3d838a9725569b
-- haskell-src-exts-1.21.0@sha256:02421cacaa48c055551b8e5796efc543301b7ea9527a38e1385403d2b85512fb
 
 # Override default flag values for local packages and extra-deps
 # flags: {}
@@ -68,3 +64,19 @@ extra-deps:
 #
 # Allow a newer minor version of GHC than the snapshot specifies
 # compiler-check: newer-minor
+
+# Build the project within a container
+docker:
+  # This appears not to work, hence the manual pull commands in the Makefile.
+  # Uncomment this once the `stack` bug is fixed.
+  # auto-pull: true
+  enable: true
+  repo: fpco/stack-build-small
+  stack-exe: image
+
+# Instructions for container image builds
+image:
+  containers:
+  - base: fpco/stack-build-small:lts-13.24
+    entrypoints:
+    - beefheart
