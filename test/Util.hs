@@ -40,7 +40,7 @@ instance Arbitrary Metrics where
 
 instance (Arbitrary a, Eq a, Hashable a, Arbitrary b) => Arbitrary (HashMap a b) where
   arbitrary = do
-    HMS.fromList <$> arbitrary
+    HMS.fromList <$> listOf1 arbitrary
 
 -- |We define a custom `Arbitrary` instance for `Scientific` values so that
 -- numbers aren't unusably massive for elasticsearch.
