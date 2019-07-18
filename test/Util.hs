@@ -21,11 +21,7 @@ import Beefheart
 
 -- |Helper to let us create purely random `Arbitrary` records.
 instance Arbitrary Analytics where
-  arbitrary = do
-    Analytics
-      <$> arbitrary
-      <*> oneof [arbitrary]
-      <*> arbitrary
+  arbitrary = genericArbitrarySingle
 
 -- |Although general implementations of this exist, we don't want crazy
 -- unpredictable timestamps, so create a little arbitrary instance for a
