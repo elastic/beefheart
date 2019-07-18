@@ -58,8 +58,8 @@ integrationTests m =
     , after AllSucceed "Install template" $
     -- Finally, try indexing a set of random `Analytics`
       testCase "Documents can be indexed" $ do
-        let toBulk = toBulkOperations (datePatternIndexName "fastly" "%Y") "myservice"
-        analytics <- generate arbitrary :: IO ([Analytics])
+        let toBulk = toBulkOperations "fastly" "%Y" "myservice"
+        analytics <- (generate $ listOf1 arbitrary) :: IO ([Analytics])
         let documents = analytics >>= toBulk
         bulkResp <- indexAnalytics bh documents
         case bulkResp of
