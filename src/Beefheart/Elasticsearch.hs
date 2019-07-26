@@ -8,6 +8,7 @@ module Beefheart.Elasticsearch
 
 import           ClassyPrelude
 import           Control.Monad.Catch
+import           Control.Monad.Except (runExceptT)
 import           Data.Aeson
 -- Aeson values are internally represented as `HashMap`s, which we import here
 -- in order to munge them a little bit later.
@@ -15,35 +16,93 @@ import           Data.HashMap.Lazy      hiding (filter, fromList, map)
 import qualified Data.HashMap.Lazy      as      HML
 import           Data.Time.Clock.POSIX
 import           Database.V5.Bloodhound hiding (Bucket)
+import           Network.HTTP.Req
 
 import Beefheart.Types
-
--- |Self-explanatory
-indexSettings :: IndexSettings
-indexSettings = IndexSettings (ShardCount 2) (ReplicaCount 1)
 
 -- |Since we'll try and be forward-compatible, work with just one ES type of
 -- |`doc`
 mappingName :: MappingName
-mappingName = MappingName "doc"
+mappingName = MappingName "_doc"
 
--- |Simple one-off to set up necessary ES indices
+-- |Check for the presence of a particular HTTP URL, and load up a JSON if it
+-- isn't present.
+checkOrLoad :: (ToJSON a, MonadHttp m)
+            => Url scheme       -- ^ `URL` to check
+            -> Url scheme       -- ^ `URL` to use to load the json
+            -> a                -- ^ Potential `ToJSON` value to load
+            -> m IgnoreResponse -- ^ Body-less response (useful for response code?)
+checkOrLoad checkUrl loadUrl payload = do
+  response <- req HEAD checkUrl NoReqBody ignoreResponse mempty
+  if responseStatusCode response == 200
+  then do
+    return response
+  else do
+    creation <- req PUT loadUrl (ReqBodyJson payload) ignoreResponse mempty
+    return creation
+
+-- |If the `URL`s to check and PUT JSON are the same, define a little helper
+-- function.
+idempotentLoad
+  :: (ToJSON a, MonadHttp m)
+  => Url scheme       -- ^ Single `URL` point to both `HEAD` and `POST`
+  -> a                -- ^ Potential JSON payload
+  -> m IgnoreResponse -- ^ `MonadHttp` `m` returning response `HEAD`
+idempotentLoad url body = checkOrLoad url url body
+
+-- |Simple one-off to set up necessary ES indices and other machinery like
+-- index lifecycles. In the future, we shouldn't ignore the json response, but
+-- this is okay for now.
 bootstrapElasticsearch
-  :: MonadIO m
-  => BHEnv  -- ^ Bloodhound environment
-  -> Text   -- ^ Index prefix to use for template
-  -> m ()  -- ^ For now, just ignore results
-bootstrapElasticsearch es prefix = do
-  existing <- runBH es $ templateExists templateName
-  if existing then return () else
-    runBH es $ do
-      _ <- putTemplate template templateName
-      return ()
-  where templateName = TemplateName "beefheart"
-        template = IndexTemplate
-                     (TemplatePattern $ prefix <> "*")
-                     (Just indexSettings)
-                     [toJSON AnalyticsMapping]
+  :: (Monad m, MonadIO m)
+  => Text  -- ^ Our index name
+  -> Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host, port)
+  -> m (Either HttpException IgnoreResponse) -- ^ Return either exception or response headers
+bootstrapElasticsearch esIndex esUrl =
+  runExceptT $ do
+    idempotentLoad (esUrl /: "_template" /: "beefheart") analyticsTemplate
+     >> idempotentLoad (esUrl /: "_ilm" /: "policy" /: "beefheart") ilmPolicy
+     >> checkOrLoad (esUrl /: "_alias" /: esIndex) (esUrl /: "_alias" /: indexName) newIndex
+  where indexName = (esIndex <> "-000001")
+        analyticsTemplate = toJSON $
+          object
+          [ "index_patterns" .= [ esIndex <> "*" ]
+          , "settings" .= object
+            [ "number_of_shards" .= (2 :: Int)
+            , "number_of_replicas" .= (1 :: Int)
+            , "index.lifecycle.name" .= ("beefheart" :: Text)
+            , "index.lifecycle.rollover_alias" .= esIndex
+            ]
+          , "mappings" .= toJSON AnalyticsMapping
+          ]
+        ilmPolicy = toJSON $
+          object
+          [ "policy" .= object
+            [ "phases" .= object
+              [ "hot" .= object
+                [ "actions" .= object
+                  [ "rollover" .= object
+                    [ "max_size" .= ("20GB" :: Text)
+                    ]
+                  ]
+                ]
+              , "delete" .= object
+                [ "min_age" .= ("180d" :: Text)
+                , "actions" .= object
+                  [ "delete" .= object []
+                  ]
+                ]
+              ]
+            ]
+          ]
+        newIndex = toJSON $
+          object
+          [ "aliases" .= object
+            [ esIndex .= object
+              [ "is_write_index" .= True
+              ]
+            ]
+          ]
 
 -- |Given a Bloodhound environment and a list of operations, run bulk indexing
 -- and get a response back.

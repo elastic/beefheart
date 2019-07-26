@@ -67,7 +67,7 @@ instance ToEnv EnvOptions where
 -- |Command-line arguments are defined at the top-level as a well-defined type.
 data CliOptions =
   CliOptions
-  { elasticsearchUrl   :: Server  -- ^ Where we'll index logs to.
+  { elasticsearchUrl   :: Text    -- ^ Where we'll index logs to.
   , esFlushDelay       :: Int     -- ^ Period in seconds to sleep between bulk
                                   -- indexing flushes to Elasticsearch
   , esIndex            :: Text    -- ^ Index prefix for Elasticsearch documents.
@@ -85,7 +85,13 @@ data CliOptions =
 cliOptions :: Parser CliOptions -- ^ Defines each argument as a `Parser`
 cliOptions = CliOptions
   -- Parser we define later for the Elasticsearch URL.
-  <$> serverOption
+  <$> strOption
+    ( long "elasticsearch-url"
+      <> help "destination URL for elasticsearch documents"
+      <> metavar "URL"
+      <> showDefault
+      <> value "http://localhost:9200"
+    )
   -- Parse seconds between bulk indexing events
   <*> option auto
     ( long "bulk-flush-period"
@@ -153,19 +159,6 @@ cliOptions = CliOptions
   -- Finally, some (>= 1) positional arguments for each Fastly service ID.
   <*> some (argument str (metavar "SERVICE <SERVICE> ..."))
 
--- |Here we break up the parser a little bit: this parser indicates how to
--- |process the elasticsearch argument.
-serverOption :: Parser Server -- ^ Just knows how to parse an Bloodhound/Elasticsearch `Server`
-serverOption = Server
-  -- A string option parser - pretty self-explanatory.
-  <$> strOption
-      ( long "elasticsearch-url"
-     <> help "destination URL for elasticsearch documents"
-     <> metavar "URL"
-     <> showDefault
-     <> value "http://localhost:9200"
-      )
-
 -- Executable entrypoint.
 main :: IO ()
 main = do
@@ -175,15 +168,20 @@ main = do
   -- Similar case for environment variables.
   env' <- decodeEnv :: IO (Either String EnvOptions)
 
-  case env' of
+  case (env', (parseUrl $ encodeUtf8 $ elasticsearchUrl options)) of
     -- finding `Nothing` means the API key isn't present, so fail fast here.
-    Left envError -> do
+    (Left envError, _) -> do
       putStrLn $ "Error: missing key environment variables: " <> tshow envError
+      exitFailure
+
+    -- Getting `Nothing` from parseUrl is no good, either
+    (_, Nothing) -> do
+      putStrLn $ "Error: couldn't parse elasticsearch URL " <> elasticsearchUrl options
       exitFailure
 
     -- `EnvOptions` only strictly requires a Fastly key, which is guaranteed
     -- present if we make it this far.
-    Right vars -> do
+    (Right vars, (Just parsedUrl)) -> do
       -- For convenience, we run EKG.
       metricsStore <- EKG.newStore
       EKG.registerGcMetrics metricsStore
@@ -197,7 +195,7 @@ main = do
       -- potentially authenticate to Elasticsearch if those credentials are
       -- present.
       httpManager <- HTTP.newManager HTTP.defaultManagerSettings
-      let bhEnv' = mkBHEnv (elasticsearchUrl options) httpManager
+      let bhEnv' = mkBHEnv (Server $ elasticsearchUrl options) httpManager
           bhEnv = case (esUsername vars, esPassword vars) of
                     (Just u, Just p) ->
                       bhEnv' { bhRequestHook = basicAuthHook (EsUsername u) (EsPassword p) }
@@ -208,7 +206,10 @@ main = do
       -- start executing some IO actions:
       --
       -- Create any necessary index templates.
-      bootstrapElasticsearch bhEnv (esIndex options)
+      -- TODO: should the http request manager be shared?
+      let bootstrap = (\x -> bootstrapElasticsearch (esIndex options) (fst x))
+      _ <- withRetries ifLeft $
+        either bootstrap bootstrap parsedUrl
 
       -- To retrieve and index our metrics safely between threads, use an STM
       -- Queue to communicate between consumers and producers. Important to note

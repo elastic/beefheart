@@ -14,6 +14,7 @@ module Beefheart.Types
   ) where
 
 import ClassyPrelude
+import Control.Monad.Except (ExceptT, throwError)
 import Data.Aeson
 -- My initial type specified simple numeric types, but some values from Fastly
 -- (particularly initial values from the first request) can be exceptionally
@@ -21,6 +22,11 @@ import Data.Aeson
 -- problems.
 import Data.Scientific
 import Data.Time.Clock.POSIX (POSIXTime)
+import Network.HTTP.Req
+
+-- |Required in order to run our HTTP request in various spots.
+instance (MonadIO m) => MonadHttp (ExceptT HttpException m) where
+  handleHttpException = throwError
 
 -- Fastly types
 --
@@ -232,7 +238,7 @@ data AnalyticsMapping = AnalyticsMapping deriving (Show)
 instance ToJSON AnalyticsMapping where
   toJSON AnalyticsMapping =
     object
-    [ "doc" .= object
+    [ "_doc" .= object
       [ "properties" .= object
         [ "timestamp" .= object
           [ "type" .= ("date" :: Text)]

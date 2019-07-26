@@ -2,16 +2,12 @@ module Beefheart.Fastly
     ( fastlyReq
     ) where
 
-import           ClassyPrelude
-import           Control.Monad.Except     (ExceptT, runExceptT, throwError)
-import           Data.Aeson
-import           Network.HTTP.Req
+import ClassyPrelude
+import Control.Monad.Except (runExceptT)
+import Data.Aeson
+import Network.HTTP.Req
 
 import Beefheart.Types
-
--- |Required in order to run our HTTP request later.
-instance (MonadIO m) => MonadHttp (ExceptT HttpException m) where
-  handleHttpException = throwError
 
 -- |Retrieve a JSON response from Fastly. This function's signature errs on the
 -- loosey-goosey side of polymorphism, so the `JsonResponse` need only be a

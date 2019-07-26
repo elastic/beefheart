@@ -9,7 +9,6 @@ where
 import ClassyPrelude
 import Control.Concurrent
 import Control.Retry
-import Data.Aeson
 import Data.Either
 import Network.HTTP.Req
 
@@ -29,9 +28,9 @@ backoffThenGiveUp = limitRetriesByDelay (60 * 5 * 1000 * 1000)
                     $ exponentialBackoff (1 * 1000 * 1000)
 
 ifLeft
-  :: (FromJSON a, MonadIO m)
+  :: (MonadIO m, HttpResponse a)
   => RetryStatus
-  -> Either HttpException (JsonResponse a)
+  -> Either HttpException a
   -> m Bool
 ifLeft = const (return . isLeft)
 
