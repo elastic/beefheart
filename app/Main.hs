@@ -185,7 +185,7 @@ main = do
       -- For convenience, we run EKG.
       metricsStore <- EKG.newStore
       EKG.registerGcMetrics metricsStore
-      _ <- EKG.forkServerWith metricsStore "localhost" (metricsPort options)
+      _ <- EKG.forkServerWith metricsStore "0.0.0.0" (metricsPort options)
 
       -- With our metrics/EKG value, let's record some of our runtime configuration:
       EKG.createLabel (metricN "elasticsearch-url") metricsStore
