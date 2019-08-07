@@ -10,6 +10,7 @@ import           ClassyPrelude
 import           Control.Monad.Catch
 import           Control.Monad.Except (runExceptT)
 import           Data.Aeson
+import           Data.Default (def)
 -- Aeson values are internally represented as `HashMap`s, which we import here
 -- in order to munge them a little bit later.
 import           Data.HashMap.Lazy      hiding (filter, fromList, map)
@@ -30,25 +31,28 @@ mappingName = MappingName "_doc"
 checkOrLoad :: (ToJSON a, MonadHttp m)
             => Url scheme       -- ^ `URL` to check
             -> Url scheme       -- ^ `URL` to use to load the json
+            -> Int              -- ^ ES Port
             -> a                -- ^ Potential `ToJSON` value to load
             -> m IgnoreResponse -- ^ Body-less response (useful for response code?)
-checkOrLoad checkUrl loadUrl payload = do
-  response <- req HEAD checkUrl NoReqBody ignoreResponse mempty
+checkOrLoad checkUrl loadUrl port' payload = do
+  response <- req'' $ req HEAD checkUrl NoReqBody ignoreResponse (port port')
   if responseStatusCode response == 200
   then do
     return response
   else do
-    creation <- req PUT loadUrl (ReqBodyJson payload) ignoreResponse mempty
+    creation <- req PUT loadUrl (ReqBodyJson payload) ignoreResponse (port port')
     return creation
+  where req'' = runReq def { httpConfigCheckResponse = (\_ _ _ -> Nothing) }
 
 -- |If the `URL`s to check and PUT JSON are the same, define a little helper
 -- function.
 idempotentLoad
   :: (ToJSON a, MonadHttp m)
   => Url scheme       -- ^ Single `URL` point to both `HEAD` and `POST`
+  -> Int              -- ^ ES Port
   -> a                -- ^ Potential JSON payload
   -> m IgnoreResponse -- ^ `MonadHttp` `m` returning response `HEAD`
-idempotentLoad url body = checkOrLoad url url body
+idempotentLoad url port' body = checkOrLoad url url port' body
 
 -- |Simple one-off to set up necessary ES indices and other machinery like
 -- index lifecycles. In the future, we shouldn't ignore the json response, but
@@ -57,12 +61,13 @@ bootstrapElasticsearch
   :: (Monad m, MonadIO m)
   => Text  -- ^ Our index name
   -> Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host, port)
+  -> Int -- ^ ES Port
   -> m (Either HttpException IgnoreResponse) -- ^ Return either exception or response headers
-bootstrapElasticsearch esIndex esUrl =
+bootstrapElasticsearch esIndex esUrl port' =
   runExceptT $ do
-    idempotentLoad (esUrl /: "_template" /: "beefheart") analyticsTemplate
-     >> idempotentLoad (esUrl /: "_ilm" /: "policy" /: "beefheart") ilmPolicy
-     >> checkOrLoad (esUrl /: "_alias" /: esIndex) (esUrl /: "_alias" /: indexName) newIndex
+    idempotentLoad (esUrl /: "_template" /: "beefheart") port' analyticsTemplate
+     >> idempotentLoad (esUrl /: "_ilm" /: "policy" /: "beefheart") port' ilmPolicy
+     >> checkOrLoad (esUrl /: "_alias" /: esIndex) (esUrl /: indexName) port' newIndex
   where indexName = (esIndex <> "-000001")
         analyticsTemplate = toJSON $
           object

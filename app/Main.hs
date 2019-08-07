@@ -10,6 +10,7 @@ import Control.Concurrent
 import Control.Concurrent.STM.TBQueue
 import Control.Monad.STM
 import Control.Monad.Loops (iterateM_)
+import Data.Text (splitOn)
 import Data.Time.Clock.POSIX
 import GHC.Natural (Natural, intToNatural)
 -- This is our Elasticsearch library.
@@ -21,6 +22,7 @@ import Options.Applicative
 -- Environment variable parsing.
 import System.Envy hiding (Parser)
 import System.Exit
+import Text.Read (readMaybe)
 -- EKG is a high-level process metrics collection and introspection library - by
 -- default, its interface will be available over http://localhost:8000 after
 -- starting the application.
@@ -167,21 +169,29 @@ main = do
   options <- execParser opts
   -- Similar case for environment variables.
   env' <- decodeEnv :: IO (Either String EnvOptions)
+  let parsedPort = case splitOn ":" (elasticsearchUrl options) of
+                     (_scheme:_host:p:[]) -> readMaybe $ unpack p
+                     _ -> Nothing
 
-  case (env', (parseUrl $ encodeUtf8 $ elasticsearchUrl options)) of
+  case (env', (parseUrl $ encodeUtf8 $ elasticsearchUrl options), parsedPort) of
     -- finding `Nothing` means the API key isn't present, so fail fast here.
-    (Left envError, _) -> do
+    (Left envError, _, _) -> do
       putStrLn $ "Error: missing key environment variables: " <> tshow envError
       exitFailure
 
     -- Getting `Nothing` from parseUrl is no good, either
-    (_, Nothing) -> do
+    (_, Nothing, _) -> do
       putStrLn $ "Error: couldn't parse elasticsearch URL " <> elasticsearchUrl options
+      exitFailure
+
+    -- A `Nothing` port means we can't `read` that, either
+    (_, _, Nothing) -> do
+      putStrLn $ "Error: couldn't parse elasticsearch port for " <> elasticsearchUrl options
       exitFailure
 
     -- `EnvOptions` only strictly requires a Fastly key, which is guaranteed
     -- present if we make it this far.
-    (Right vars, (Just parsedUrl)) -> do
+    (Right vars, (Just parsedUrl), (Just port')) -> do
       -- For convenience, we run EKG.
       metricsStore <- EKG.newStore
       EKG.registerGcMetrics metricsStore
@@ -207,9 +217,12 @@ main = do
       --
       -- Create any necessary index templates.
       -- TODO: should the http request manager be shared?
-      let bootstrap = (\x -> bootstrapElasticsearch (esIndex options) (fst x))
-      _ <- withRetries ifLeft $
+      let bootstrap = (\x -> bootstrapElasticsearch (esIndex options) (fst x) port')
+      resp <- withRetries ifLeft $ do
         either bootstrap bootstrap parsedUrl
+      case resp of
+           Left e -> print e
+           Right r -> print $ responseBody r
 
       -- To retrieve and index our metrics safely between threads, use an STM
       -- Queue to communicate between consumers and producers. Important to note
