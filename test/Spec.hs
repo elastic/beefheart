@@ -1,9 +1,10 @@
-import ClassyPrelude
+import ClassyPrelude hiding (assert)
 
 import Control.Retry
 import Data.Aeson
 import Database.V5.Bloodhound
 import Network.HTTP.Client
+import Network.HTTP.Req
 import Test.Tasty
 import Test.Tasty.HUnit
 import Test.Tasty.QuickCheck
@@ -41,7 +42,7 @@ unitTests =
 -- works.
 integrationTests :: Manager -> TestTree
 integrationTests m =
-  withResource (elasticsearchContainer "6.5.4") containerCleanup $ \_cid ->
+  withResource (elasticsearchContainer "6.8.2") containerCleanup $ \_cid ->
     testGroup "Integration Tests"
     -- First, confirm the API is responsive.
     [ testCase "Elasticsearch is UP" $ do
@@ -50,11 +51,14 @@ integrationTests m =
     , after AllSucceed "Elasticsearch is UP" $
     -- Then, try installing the index template.
       testCase "Install template" $ do
-        bootstrapElasticsearch bh "fastly"
+        resp <- bootstrapElasticsearch True "fastly" (http "localhost") 9200
+        case resp of
+           Left exc -> assertFailure $ "Bootstrap failed: " <> show exc
+           Right httpResp -> responseStatusCode httpResp @?= 200
     , after AllSucceed "Install template" $
     -- Finally, try indexing a set of random `Analytics`
       testCase "Documents can be indexed" $ do
-        let toBulk = toBulkOperations "fastly" "%Y" "myservice"
+        let toBulk = toBulkOperations (datePatternIndexName "fastly" "%Y") "myservice"
         analytics <- generate arbitrary :: IO ([Analytics])
         let documents = analytics >>= toBulk
         bulkResp <- indexAnalytics bh documents

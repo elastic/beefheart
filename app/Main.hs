@@ -75,6 +75,7 @@ data CliOptions =
   , esIndex            :: Text    -- ^ Index prefix for Elasticsearch documents.
   , esDatePattern      :: Text    -- ^ Date pattern suffix for Elasticsearch indices
   , fastlyBackoff      :: Int     -- ^ Seconds to sleep when encountering Fastly API errors.
+  , noILM              :: Bool    -- ^ Whether or not to use ILM for index rotation.
   , metricsPort        :: Int     -- ^ Optional port to expose metrics over.
   , queueMetricsWakeup :: Int     -- ^ Period in seconds that the queue metrics thread will wakeup
   , queueScalingFactor :: Natural -- ^ Factor applied to service count for metrics queue
@@ -125,6 +126,14 @@ cliOptions = CliOptions
       <> showDefault
       <> value 60
       <> metavar "SECONDS"
+    )
+  <*> switch
+    ( long "no-ilm"
+      <> help ("Whether or not to rely on ILM for index rotation and curation. "
+            <> "Requires basic (non-OSS) Elasticsearch distribution. "
+            <> "If set, rely on date pattern strategy instead."
+            )
+      <> showDefault
     )
   -- How to parse the metrics port.
   <*> option auto
@@ -217,12 +226,12 @@ main = do
       --
       -- Create any necessary index templates.
       -- TODO: should the http request manager be shared?
-      let bootstrap = (\x -> bootstrapElasticsearch (esIndex options) (fst x) port')
+      let bootstrap = (\x -> bootstrapElasticsearch (noILM options) (esIndex options) (fst x) port')
       resp <- withRetries ifLeft $ do
         either bootstrap bootstrap parsedUrl
       case resp of
            Left e -> print e
-           Right r -> print $ responseBody r
+           Right _r -> pure ()
 
       -- To retrieve and index our metrics safely between threads, use an STM
       -- Queue to communicate between consumers and producers. Important to note
@@ -245,13 +254,18 @@ main = do
           -- versus a hard limit.
           $ min (length $ services options) (serviceScalingCap options)
 
+      let indexNamer = if (noILM options)
+                       then
+                         datePatternIndexName (esIndex options) (esDatePattern options)
+                       else
+                         (\_ -> IndexName (esIndex options))
+
       -- Spawn threads for each service which will fetch and queue up documents to be indexed.
       _metricsThreadIds <- forM (services options) $ \service ->
         forkIO $ metricsRunner metricsStore
                                (fastlyBackoff options)
                                metricsQueue
-                               (esIndex options)
-                               (esDatePattern options)
+                               indexNamer
                                (fastlyKey vars)
                                service
 
@@ -292,15 +306,14 @@ queueWatcher period ekg q = do
 -- |Self-contained IO action to regularly fetch and queue up metrics for storage
 -- in Elasticsearch.
 metricsRunner
-  :: EKG.Store             -- ^ EKG metrics
-  -> Int                   -- ^ Fastly API backoff factor
-  -> TBQueue BulkOperation -- ^ Where we'll enqueue our ES docs
-  -> Text                  -- ^ ES index prefix
-  -> Text                  -- ^ ES index date pattern
-  -> Text                  -- ^ Fastly API key
-  -> Text                  -- ^ Fastly service ID
-  -> IO ()                 -- ^ Negligible return type
-metricsRunner ekg backoff q indexPrefix datePattern key service = do
+  :: EKG.Store                -- ^ EKG metrics
+  -> Int                      -- ^ Fastly API backoff factor
+  -> TBQueue BulkOperation    -- ^ Where we'll enqueue our ES docs
+  -> (POSIXTime -> IndexName) -- ^ Function to generate the index name
+  -> Text                     -- ^ Fastly API key
+  -> Text                     -- ^ Fastly service ID
+  -> IO ()                    -- ^ Negligible return type
+metricsRunner ekg backoff q indexNamer key service = do
   -- Create a metrics counter for this service.
   counter <- EKG.createCounter (metricN $ "requests-" <> service) ekg
 
@@ -325,7 +338,7 @@ metricsRunner ekg backoff q indexPrefix datePattern key service = do
       -- the next request.
       iterateM_ (queueMetricsFor backoff q toDocs getMetrics) 0
       where getMetrics = fetchMetrics counter key service
-            toDocs = toBulkOperations indexPrefix datePattern serviceName
+            toDocs = toBulkOperations indexNamer serviceName
             serviceName = name $ responseBody serviceDetailsResponse
 
 -- |Higher-order function suitable to be fed into iterate that will be the main

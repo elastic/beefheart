@@ -1,5 +1,6 @@
 module Beefheart.Elasticsearch
     ( bootstrapElasticsearch
+    , datePatternIndexName
     , indexAnalytics
     , mappingName
     , mergeAeson
@@ -59,28 +60,48 @@ idempotentLoad url port' body = checkOrLoad url url port' body
 -- this is okay for now.
 bootstrapElasticsearch
   :: (Monad m, MonadIO m)
-  => Text  -- ^ Our index name
+  => Bool -- ^ Whether to setup ILM pieces as well
+  -> Text -- ^ Our index name
   -> Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host, port)
   -> Int -- ^ ES Port
   -> m (Either HttpException IgnoreResponse) -- ^ Return either exception or response headers
-bootstrapElasticsearch esIndex esUrl port' =
+bootstrapElasticsearch noILM esIndex esUrl port' =
   runExceptT $ do
-    idempotentLoad (esUrl /: "_template" /: "beefheart") port' analyticsTemplate
-     >> idempotentLoad (esUrl /: "_ilm" /: "policy" /: "beefheart") port' ilmPolicy
-     >> checkOrLoad (esUrl /: "_alias" /: esIndex) (esUrl /: indexName) port' newIndex
+    if noILM then do
+      setupTemplate esIndex esUrl port'
+    else do
+      setupTemplate esIndex esUrl port'
+        >> setupILM esUrl port'
+        >> setupAlias esIndex esUrl port'
+
+-- |Configure the index (and alias).
+setupAlias
+  :: (MonadHttp m)
+  => Text  -- ^ Our index name
+  -> Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host, port)
+  -> Int -- ^ ES Port
+  -> m (IgnoreResponse) -- ^ Return either exception or response headers
+setupAlias esIndex esUrl port' =
+  checkOrLoad (esUrl /: "_alias" /: esIndex) (esUrl /: indexName) port' newIndex
   where indexName = (esIndex <> "-000001")
-        analyticsTemplate = toJSON $
+        newIndex = toJSON $
           object
-          [ "index_patterns" .= [ esIndex <> "*" ]
-          , "settings" .= object
-            [ "number_of_shards" .= (2 :: Int)
-            , "number_of_replicas" .= (1 :: Int)
-            , "index.lifecycle.name" .= ("beefheart" :: Text)
-            , "index.lifecycle.rollover_alias" .= esIndex
+          [ "aliases" .= object
+            [ esIndex .= object
+              [ "is_write_index" .= True
+              ]
             ]
-          , "mappings" .= toJSON AnalyticsMapping
           ]
-        ilmPolicy = toJSON $
+
+-- |Setup ILM policy.
+setupILM
+  :: (MonadHttp m)
+  => Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host, port)
+  -> Int -- ^ ES Port
+  -> m (IgnoreResponse) -- ^ Return either exception or response headers
+setupILM esUrl port' =
+  idempotentLoad (esUrl /: "_ilm" /: "policy" /: "beefheart") port' ilmPolicy
+  where ilmPolicy = toJSON $
           object
           [ "policy" .= object
             [ "phases" .= object
@@ -100,13 +121,26 @@ bootstrapElasticsearch esIndex esUrl port' =
               ]
             ]
           ]
-        newIndex = toJSON $
+
+-- |Set up index templates for the application.
+setupTemplate
+  :: (MonadHttp m)
+  => Text  -- ^ Our index name
+  -> Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host, port)
+  -> Int -- ^ ES Port
+  -> m (IgnoreResponse) -- ^ Return either exception or response headers
+setupTemplate esIndex esUrl port' =
+  idempotentLoad (esUrl /: "_template" /: "beefheart") port' analyticsTemplate
+  where analyticsTemplate = toJSON $
           object
-          [ "aliases" .= object
-            [ esIndex .= object
-              [ "is_write_index" .= True
-              ]
+          [ "index_patterns" .= [ esIndex <> "*" ]
+          , "settings" .= object
+            [ "number_of_shards" .= (2 :: Int)
+            , "number_of_replicas" .= (1 :: Int)
+            , "index.lifecycle.name" .= ("beefheart" :: Text)
+            , "index.lifecycle.rollover_alias" .= esIndex
             ]
+          , "mappings" .= toJSON AnalyticsMapping
           ]
 
 -- |Given a Bloodhound environment and a list of operations, run bulk indexing
@@ -124,12 +158,11 @@ indexAnalytics es operations = do
 -- Elasticsearch. The output from this is expected to be fed into
 -- `indexAnalytics`.
 toBulkOperations
-  :: Text            -- ^ Index prefix
-  -> Text            -- ^ Date pattern for indexed documents (think "%Y")
-  -> Text            -- ^ Human-readable name for service
-  -> Analytics       -- ^ Actual response from Fastly that needs to be converted
-  -> [BulkOperation] -- ^ List of resultant `BulkOperation`s
-toBulkOperations prefix datePattern serviceName metrics = map toOperation . normalize $ metrics
+  :: (POSIXTime -> IndexName) -- ^ Index prefix name generator
+  -> Text                -- ^ Human-readable name for service
+  -> Analytics           -- ^ Actual response from Fastly that needs to be converted
+  -> [BulkOperation]     -- ^ List of resultant `BulkOperation`s
+toBulkOperations indexNamer serviceName metrics = map toOperation . normalize $ metrics
   where
     -- `normalize` in this context means taking an `Analytics` value and massaging it
     -- into the Aeson `Value` (or JSON) that we'd ultimately like it to be
@@ -143,13 +176,20 @@ toBulkOperations prefix datePattern serviceName metrics = map toOperation . norm
                       $ datacenter metrics'
 
     -- Take an Aeson `Value` and put it into BulkOperation form.
-    toOperation = BulkIndexAuto indexName mappingName
-    -- Note that `indexSuffix` might try to be _too_ helpful by quoting
-    -- itself, which is why we filter out extraneous quotes.
-    indexName = IndexName $ prefix <> "-" <> pack (filter (/= '"') indexSuffix)
-    indexSuffix =
-      formatTime defaultTimeLocale (show datePattern) $
-        posixSecondsToUTCTime (timestamp metrics)
+    toOperation = BulkIndexAuto (indexNamer $ timestamp metrics) mappingName
+
+-- |Index name when we want to use date pattern format (without ILM)
+datePatternIndexName
+  :: Text -- ^ The index prefix
+  -> Text -- ^ Date pattern (think "%Y")
+  -> POSIXTime -- ^ Timestamp to create the index suffix from
+  -> IndexName -- ^ Our final ES index name
+datePatternIndexName prefix datePattern ts =
+  -- Note that `indexSuffix` might try to be _too_ helpful by quoting
+  -- itself, which is why we filter out extraneous quotes.
+  IndexName $ prefix <> "-" <> pack (filter (/= '"') indexSuffix)
+  where indexSuffix = formatTime defaultTimeLocale (show datePattern) $
+                        posixSecondsToUTCTime ts
 
 -- |Helper to take a list of `Value`s, a `Metric` we'd ultimately like to index,
 -- and return a list of `Value`s. The function signature can be composed

@@ -83,7 +83,7 @@ elasticsearchContainer v = do
             _ <- startContainer defaultStartOpts i
             return i
     where pb = PortBinding 9200 TCP [HostPort "0.0.0.0" 9200]
-          myCreateOpts = addPortBinding pb $ defaultCreateOpts $ "docker.elastic.co/elasticsearch/elasticsearch-oss:" <> v
+          myCreateOpts = addPortBinding pb $ defaultCreateOpts $ "docker.elastic.co/elasticsearch/elasticsearch:" <> v
 
 -- |Stop and remove a container ID.
 containerCleanup :: ContainerID -> IO ()

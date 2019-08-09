@@ -47,6 +47,7 @@ library:
   default-extensions:
   - DataKinds
   - DeriveGeneric
+  - FlexibleContexts
   - FlexibleInstances
   - NoImplicitPrelude
   - OverloadedStrings
@@ -60,6 +61,7 @@ executables:
     source-dirs:         app
     default-extensions:
     - DeriveGeneric
+    - FlexibleContexts
     - RecordWildCards
     - NoImplicitPrelude
     - OverloadedStrings
@@ -85,6 +87,7 @@ tests:
     - -optP-Wno-nonportable-include-path
     - -fno-warn-orphans
     default-extensions:
+    - FlexibleContexts
     - FlexibleInstances
     - NoImplicitPrelude
     - OverloadedStrings
