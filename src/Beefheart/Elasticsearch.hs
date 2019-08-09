@@ -62,7 +62,7 @@ bootstrapElasticsearch
   :: (Monad m, MonadIO m)
   => Bool -- ^ Whether to setup ILM pieces as well
   -> Text -- ^ Our index name
-  -> Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host, port)
+  -> Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host)
   -> Int -- ^ ES Port
   -> m (Either HttpException IgnoreResponse) -- ^ Return either exception or response headers
 bootstrapElasticsearch noILM esIndex esUrl port' =
@@ -78,7 +78,7 @@ bootstrapElasticsearch noILM esIndex esUrl port' =
 setupAlias
   :: (MonadHttp m)
   => Text  -- ^ Our index name
-  -> Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host, port)
+  -> Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host)
   -> Int -- ^ ES Port
   -> m (IgnoreResponse) -- ^ Return either exception or response headers
 setupAlias esIndex esUrl port' =
@@ -96,7 +96,7 @@ setupAlias esIndex esUrl port' =
 -- |Setup ILM policy.
 setupILM
   :: (MonadHttp m)
-  => Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host, port)
+  => Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host)
   -> Int -- ^ ES Port
   -> m (IgnoreResponse) -- ^ Return either exception or response headers
 setupILM esUrl port' =
@@ -126,7 +126,7 @@ setupILM esUrl port' =
 setupTemplate
   :: (MonadHttp m)
   => Text  -- ^ Our index name
-  -> Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host, port)
+  -> Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host)
   -> Int -- ^ ES Port
   -> m (IgnoreResponse) -- ^ Return either exception or response headers
 setupTemplate esIndex esUrl port' =
@@ -147,8 +147,8 @@ setupTemplate esIndex esUrl port' =
 -- and get a response back.
 indexAnalytics
   :: (MonadIO m, MonadThrow m)
-  => BHEnv                            -- ^ Bloodhound environment
-  -> [BulkOperation]                  -- ^ List of operations to index
+  => BHEnv                           -- ^ Bloodhound environment
+  -> [BulkOperation]                 -- ^ List of operations to index
   -> m (Either EsError BulkResponse) -- ^ Bulk request response
 indexAnalytics es operations = do
   response <- runBH es . bulk . fromList $ operations

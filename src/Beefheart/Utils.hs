@@ -21,7 +21,7 @@ withRetries
 withRetries check m =
   retrying backoffThenGiveUp check $ const m
 
--- Initially wait one second, backoff exponentially, then concede to the
+-- |Initially wait one second, backoff exponentially, then concede to the
 -- impossibility of the request if retries reach 5 minutes.
 backoffThenGiveUp :: Monad m => RetryPolicyM m
 backoffThenGiveUp = limitRetriesByDelay (60 * 5 * 1000 * 1000)
