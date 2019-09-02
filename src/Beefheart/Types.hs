@@ -3,9 +3,12 @@
 module Beefheart.Types
   ( Analytics(..)
   , AnalyticsMapping(..)
+  , App(..)
   , Bucket
   , BulkResponse(..)
+  , CliOptions(..)
   , Datacenter(..)
+  , EnvOptions(..)
   , FastlyRequest(..)
   , FastlyService(..)
   , Metrics
@@ -13,7 +16,10 @@ module Beefheart.Types
   , ServiceDetails(..)
   ) where
 
-import ClassyPrelude
+import RIO
+import RIO.Char
+import RIO.Time
+
 import Control.Monad.Except (ExceptT, throwError)
 import Data.Aeson
 -- My initial type specified simple numeric types, but some values from Fastly
@@ -22,11 +28,80 @@ import Data.Aeson
 -- problems.
 import Data.Scientific
 import Data.Time.Clock.POSIX (POSIXTime)
+import Database.V5.Bloodhound (BHEnv, BulkOperation)
 import Network.HTTP.Req
+import System.Envy hiding (Parser, (.=))
+
+import qualified System.Envy as E
+import qualified System.Metrics as EKG
 
 -- |Required in order to run our HTTP request in various spots.
 instance (MonadIO m) => MonadHttp (ExceptT HttpException m) where
   handleHttpException = throwError
+
+-- |Command-line arguments are defined at the top-level as a well-defined type.
+data CliOptions =
+  CliOptions
+  { elasticsearchUrl   :: Text    -- ^ Where we'll index logs to.
+  , esFlushDelay       :: Int     -- ^ Period in seconds to sleep between bulk
+                                  -- indexing flushes to Elasticsearch
+  , esIndex            :: Text    -- ^ Index prefix for Elasticsearch documents.
+  , esDatePattern      :: Text    -- ^ Date pattern suffix for Elasticsearch
+                                  -- indices (when not using ILM)
+  , fastlyBackoff      :: Int     -- ^ Seconds to sleep when encountering Fastly API errors.
+  , noILM              :: Bool    -- ^ Whether or not to use ILM for index rotation.
+  , logVerbose         :: Bool    -- ^ Whether to log verbosely
+  , metricsPort        :: Int     -- ^ Optional port to expose metrics over.
+  , queueMetricsWakeup :: Int     -- ^ Period in seconds that the queue metrics thread will wakeup
+  , queueScalingFactor :: Natural -- ^ Factor applied to service count for metrics queue
+  , serviceScalingCap  :: Int     -- ^ A maximum value for how to scale the in-memory metrics document queue.
+  , services           :: [Text]  -- ^ Which services to collect analytics for.
+  }
+
+-- |Enumerates all the environment variables we expect.
+data EnvOptions =
+  EnvOptions
+  { fastlyKey  :: Text
+  , esUsername :: Maybe Text
+  , esPassword :: Maybe Text
+  } deriving (Generic, Show)
+
+-- |Although `envy` does support deriving Generic, this and `ToEnv` are
+-- |explicitly defined because `Maybe a` support isn't quite as clean without
+-- |explicit typeclasses.
+-- |
+-- |This instance instructs how to _get_ variables from the environment
+instance FromEnv EnvOptions where
+  fromEnv _ =
+    EnvOptions
+    <$> env "FASTLY_KEY"
+    <*> envMaybe "ES_USERNAME"
+    <*> envMaybe "ES_PASSWORD"
+
+-- |This instance represents how to show our record in errors/CLI
+-- documentation.
+instance ToEnv EnvOptions where
+  toEnv EnvOptions {..} =
+    makeEnv
+    [ "FASTLY_KEY"  E..= fastlyKey
+    , "ES_USERNAME" E..= esUsername
+    , "ES_PASSWORD" E..= esPassword
+    ]
+
+-- |This is the application environment that RIO requires as its ReaderT value.
+-- This value will be readable from our application context wherever we run it.
+data App = App
+  { appEnv     :: EnvOptions
+  , appCli     :: CliOptions
+  , appLogFunc :: !LogFunc
+  , appBH      :: BHEnv
+  , appQueue   :: TBQueue BulkOperation
+  , appEKG     :: EKG.Store
+  }
+
+-- |Some boilerplate to support the previous record.
+instance HasLogFunc App where
+  logFuncL = lens appLogFunc (\x y -> x { appLogFunc = y })
 
 -- Fastly types
 --
@@ -62,7 +137,7 @@ fastlyApiEncoding = defaultOptions { fieldLabelModifier = capitalizeOrScrub }
 
 -- |Capitalizes a string.
 capitalize :: String -> String
-capitalize (head':tail') = charToUpper head' : tail'
+capitalize (head':tail') = toUpper head' : tail'
 capitalize [] = []
 
 -- |A `Datacenter` encapsulates a point in time that a Fastly datacenter's

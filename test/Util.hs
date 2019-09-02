@@ -4,7 +4,8 @@ module Util
   )
 where
 
-import ClassyPrelude
+import RIO
+
 import Control.Monad.Catch
 import Data.Char
 import qualified Data.HashMap.Strict as HMS

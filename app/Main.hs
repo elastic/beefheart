@@ -2,86 +2,31 @@ module Main where
 
 import Beefheart
 
--- Note the use of `ClassyPrelude` here in lieu of the typical `Prelude`. This
+-- Note the use of `RIO` here in lieu of the typical `Prelude`. This
 -- is done primarily in order to get a baseline library with more
 -- community-standardized tools like `text` and `async`.
-import ClassyPrelude hiding (atomically)
-import Control.Concurrent
-import Control.Concurrent.STM.TBQueue
-import Control.Monad.STM
-import Control.Monad.Loops (iterateM_)
+import RIO
+import RIO.Text hiding (length)
+
 import Data.Text (splitOn)
-import Data.Time.Clock.POSIX
-import GHC.Natural (Natural, intToNatural)
+import GHC.Natural (intToNatural)
 -- This is our Elasticsearch library.
 import Database.V5.Bloodhound hiding (esUsername, esPassword, key, name)
+-- Think of the equivalent to python's `requests`
 import qualified Network.HTTP.Client as HTTP
 import Network.HTTP.Req hiding (header)
 -- CLI option parsing.
 import Options.Applicative
 -- Environment variable parsing.
 import System.Envy hiding (Parser)
-import System.Exit
 import Text.Read (readMaybe)
+
 -- EKG is a high-level process metrics collection and introspection library - by
 -- default, its interface will be available over http://localhost:8000 after
 -- starting the application.
 import qualified System.Metrics as EKG
-import qualified System.Metrics.Counter as Counter
-import qualified System.Metrics.Gauge as Gauge
 import qualified System.Metrics.Label as Label
 import qualified System.Remote.Monitoring as EKG
-
--- |Just so we define it in one place
-applicationName :: Text
-applicationName = "beefheart"
-
--- |Helper to create EKG metric names
-metricN :: Text -> Text
-metricN n = applicationName <> "." <> n
-
--- |Enumerates all the environment variables we expect.
-data EnvOptions =
-  EnvOptions
-  { fastlyKey  :: Text
-  , esUsername :: Maybe Text
-  , esPassword :: Maybe Text
-  } deriving (Generic, Show)
-
--- |Although `envy` does support deriving Generic, this and `ToEnv` are
--- |explicitly defined because `Maybe a` support isn't quite as clean without
--- |explicit typeclasses.
-instance FromEnv EnvOptions where
-  fromEnv =
-    EnvOptions
-    <$> env "FASTLY_KEY"
-    <*> envMaybe "ES_USERNAME"
-    <*> envMaybe "ES_PASSWORD"
-
-instance ToEnv EnvOptions where
-  toEnv EnvOptions {..} =
-    makeEnv
-    [ "FASTLY_KEY"  .= fastlyKey
-    , "ES_USERNAME" .= esUsername
-    , "ES_PASSWORD" .= esPassword
-    ]
-
--- |Command-line arguments are defined at the top-level as a well-defined type.
-data CliOptions =
-  CliOptions
-  { elasticsearchUrl   :: Text    -- ^ Where we'll index logs to.
-  , esFlushDelay       :: Int     -- ^ Period in seconds to sleep between bulk
-                                  -- indexing flushes to Elasticsearch
-  , esIndex            :: Text    -- ^ Index prefix for Elasticsearch documents.
-  , esDatePattern      :: Text    -- ^ Date pattern suffix for Elasticsearch indices
-  , fastlyBackoff      :: Int     -- ^ Seconds to sleep when encountering Fastly API errors.
-  , noILM              :: Bool    -- ^ Whether or not to use ILM for index rotation.
-  , metricsPort        :: Int     -- ^ Optional port to expose metrics over.
-  , queueMetricsWakeup :: Int     -- ^ Period in seconds that the queue metrics thread will wakeup
-  , queueScalingFactor :: Natural -- ^ Factor applied to service count for metrics queue
-  , serviceScalingCap  :: Int     -- ^ A maximum value for how to scale the in-memory metrics document queue.
-  , services           :: [Text]  -- ^ Which services to collect analytics for.
-  }
 
 -- |This is the actual parser that will be run over the executable's CLI
 -- |arguments.
@@ -114,7 +59,9 @@ cliOptions = CliOptions
   -- Date pattern in classic unix form
   <*> strOption
     ( long "date-pattern"
-      <> help "date pattern suffix for Elasticsearch index"
+      <> help ("date pattern suffix for Elasticsearch index to use when ILM "
+            <> "isn't used to deal with index rollover"
+            )
       <> metavar "PATTERN"
       <> showDefault
       <> value "%Y.%m.%d"
@@ -133,6 +80,12 @@ cliOptions = CliOptions
             <> "Requires basic (non-OSS) Elasticsearch distribution. "
             <> "If set, rely on date pattern strategy instead."
             )
+      <> showDefault
+    )
+  -- Simple verbose switch
+  <*> switch
+    ( long "verbose"
+      <> help "Verbose logging."
       <> showDefault
     )
   -- How to parse the metrics port.
@@ -182,20 +135,24 @@ main = do
                      (_scheme:_host:p:[]) -> readMaybe $ unpack p
                      _ -> Nothing
 
+  -- A top-level case pattern match is easier to grok for particular failures
   case (env', (parseUrl $ encodeUtf8 $ elasticsearchUrl options), parsedPort) of
     -- finding `Nothing` means the API key isn't present, so fail fast here.
     (Left envError, _, _) -> do
-      putStrLn $ "Error: missing key environment variables: " <> tshow envError
+      runSimpleApp $ do
+        logError . display . pack $ "Error: missing key environment variables: " <> envError
       exitFailure
 
     -- Getting `Nothing` from parseUrl is no good, either
     (_, Nothing, _) -> do
-      putStrLn $ "Error: couldn't parse elasticsearch URL " <> elasticsearchUrl options
+      runSimpleApp $ do
+        logError . display $ "Error: couldn't parse elasticsearch URL " <> elasticsearchUrl options
       exitFailure
 
     -- A `Nothing` port means we can't `read` that, either
     (_, _, Nothing) -> do
-      putStrLn $ "Error: couldn't parse elasticsearch port for " <> elasticsearchUrl options
+      runSimpleApp $ do
+        logError . display $ "Error: couldn't parse elasticsearch port for " <> elasticsearchUrl options
       exitFailure
 
     -- `EnvOptions` only strictly requires a Fastly key, which is guaranteed
@@ -221,18 +178,6 @@ main = do
                     _ ->
                       bhEnv'
 
-      -- At this point our options are parsed and the API key is available, so
-      -- start executing some IO actions:
-      --
-      -- Create any necessary index templates.
-      -- TODO: should the http request manager be shared?
-      let bootstrap = (\x -> bootstrapElasticsearch (noILM options) (esIndex options) (fst x) port')
-      resp <- withRetries ifLeft $ do
-        either bootstrap bootstrap parsedUrl
-      case resp of
-           Left e -> print e
-           Right _r -> pure ()
-
       -- To retrieve and index our metrics safely between threads, use an STM
       -- Queue to communicate between consumers and producers. Important to note
       -- that the queue is bounded to avoid consumer/producer deadlock problems.
@@ -254,29 +199,65 @@ main = do
           -- versus a hard limit.
           $ min (length $ services options) (serviceScalingCap options)
 
-      let indexNamer = if (noILM options)
-                       then
-                         datePatternIndexName (esIndex options) (esDatePattern options)
-                       else
-                         (\_ -> IndexName (esIndex options))
+      -- Setup a log function, then...
+      logOptions <- logOptionsHandle stderr (logVerbose options)
+      -- nest our application within a context that has a log handling function
+      -- (`lf`)
+      withLogFunc logOptions $ \lf -> do
+        -- This is our core datatype; our `App` that houses our logging hook,
+        -- configuration information, etc.
+        let app = App
+                  { appEnv = vars
+                  , appCli = options
+                  , appLogFunc = lf
+                  , appBH = bhEnv
+                  , appQueue = metricsQueue
+                  , appEKG = metricsStore
+                  }
 
-      -- Spawn threads for each service which will fetch and queue up documents to be indexed.
-      _metricsThreadIds <- forM (services options) $ \service ->
-        forkIO $ metricsRunner metricsStore
-                               (fastlyBackoff options)
-                               metricsQueue
-                               indexNamer
-                               (fastlyKey vars)
-                               service
+        -- The default Haskell `Prelude` replacement we're using is `RIO`. RIO
+        -- runs its main logic inside `runRIO`, which accepts our application
+        -- environment as an argument, and everything after this point lives
+        -- within `RIO`, so note that anything `IO`-related needs a `liftIO`.
+        runRIO app $ do
+          -- At this point our options are parsed and the API key is available, so
+          -- start executing some IO actions:
+          --
+          -- Create any necessary index templates.
+          -- TODO should the http request manager be shared?
+          let bootstrap :: (Url scheme, b) -> IO (Either HttpException IgnoreResponse)
+              bootstrap = (\x -> bootstrapElasticsearch (noILM options) (esIndex options) (fst x) port')
+          resp <- liftIO $ withRetries ifLeft $ do
+            either bootstrap bootstrap parsedUrl
 
-      -- Spin up another thread to report our queue size metrics to EKG.
-      _watcherThreadId <- forkIO $ queueWatcher (queueMetricsWakeup options) metricsStore metricsQueue
+          case resp of
+               Left e ->
+                 logError . display $ tshow e
+               Right _r ->
+                 logDebug . display $ "Successfully created ES templates for " <> (esIndex options)
 
-      -- Finally, run our consumer to read metrics from the bounded queue in our
-      -- main thread. Because we're already bulking index requests to
-      -- Elasticsearch, there's not really a need to aggressively parallelize
-      -- this.
-      indexingRunner bhEnv (esFlushDelay options) metricsQueue
+          -- Because we support either timestamp-appended indices or automagic
+          -- ILM index rollover, naming the index varies depending on whether
+          -- ILM is in-use or not.
+          let indexNamer = if (noILM options)
+                          then
+                            datePatternIndexName (esIndex options) (esDatePattern options)
+                          else
+                            (\_ -> IndexName (esIndex options))
+
+          -- Spawn threads for each service which will fetch and queue up documents to be indexed.
+          _metricsThreads <- forM (services $ appCli app) $ \service ->
+            async $ metricsRunner app indexNamer service
+
+          -- Spin up another thread to report our queue size metrics to EKG.
+          gauge <- liftIO $ EKG.createGauge (metricN "metricsQueue") (appEKG app)
+          _watcherThread <- async $ queueWatcher app gauge
+
+          -- Finally, run our consumer to read metrics from the bounded queue in our
+          -- main thread. Because we're already bulking index requests to
+          -- Elasticsearch, there's not really a need to aggressively parallelize
+          -- this.
+          indexingRunner app
 
   -- This is where we instantiate our option parser.
   where opts = info (cliOptions <**> helper)
@@ -289,134 +270,3 @@ main = do
                           <> "fiery sriracha honey wasabi BBQ sauce and set on "
                           <> "a rotating lazy Susan.")
                )
-
--- |Small utility to keep an eye on our bulk operations queue.
-queueWatcher
-  :: Int       -- ^ Period to sleep in between queue polling
-  -> EKG.Store -- ^ EKG metrics
-  -> TBQueue a -- ^ Queue to watch
-  -> IO b
-queueWatcher period ekg q = do
-  gauge <- EKG.createGauge (metricN "metricsQueue") ekg
-  forever $ do
-    queueLength <- atomically $ lengthTBQueue q
-    Gauge.set gauge $ fromIntegral queueLength
-    sleepSeconds period
-
--- |Self-contained IO action to regularly fetch and queue up metrics for storage
--- in Elasticsearch.
-metricsRunner
-  :: EKG.Store                -- ^ EKG metrics
-  -> Int                      -- ^ Fastly API backoff factor
-  -> TBQueue BulkOperation    -- ^ Where we'll enqueue our ES docs
-  -> (POSIXTime -> IndexName) -- ^ Function to generate the index name
-  -> Text                     -- ^ Fastly API key
-  -> Text                     -- ^ Fastly service ID
-  -> IO ()                    -- ^ Negligible return type
-metricsRunner ekg backoff q indexNamer key service = do
-  -- Create a metrics counter for this service.
-  counter <- EKG.createCounter (metricN $ "requests-" <> service) ekg
-
-  -- Fetch the service ID's details (to get the human-readable name)
-  serviceDetails <- withRetries ifLeft $ fastlyReq FastlyRequest
-    { apiKey       = key
-    , timestampReq = Nothing
-    , serviceId    = service
-    , service      = ServiceAPI
-    }
-
-  case serviceDetails of
-    Left err ->
-      putStrLn $ "Skipping service " <> service <> ": " <> tshow err
-    Right serviceDetailsResponse -> do
-      -- Before entering the metrics fetching loop, record the service's details in EKG.
-      EKG.createLabel (metricN service) ekg >>= flip Label.set serviceName
-
-      -- iterateM_ executes a monadic action (here, IO) and runs forever,
-      -- feeding the return value into the next iteration, which fits well with
-      -- our use case: keep hitting Fastly and feed the previous timestamp into
-      -- the next request.
-      iterateM_ (queueMetricsFor backoff q toDocs getMetrics) 0
-      where getMetrics = fetchMetrics counter key service
-            toDocs = toBulkOperations indexNamer serviceName
-            serviceName = name $ responseBody serviceDetailsResponse
-
--- |Higher-order function suitable to be fed into iterate that will be the main
--- metrics retrieval loop. Get a timestamp, fetch some metrics for that
--- timestamp, enqueue them, sleep, repeat.
-queueMetricsFor
-  :: Int -- ^ API backoff factor
-  -> TBQueue BulkOperation -- ^ Our application's metrics queue.
-  -> (Analytics -> [BulkOperation]) -- ^ A function to transform our metrics into ES bulk operations
-  -> (POSIXTime -> IO (Either HttpException (JsonResponse Analytics))) -- ^ Function to get metrics for a timestamp
-  -> POSIXTime -- ^ The actual metrics timestamp we want
-  -> IO POSIXTime -- ^ Return the new POSIXTime for the subsequent request
-queueMetricsFor backoff q f getter ts = do
-  response <- getter ts
-  case response of
-    Right metrics -> do
-      atomically $ mapM_ (writeTBQueue q) (f (responseBody metrics))
-      sleepSeconds 1
-      return $ timestamp $ responseBody metrics
-    Left httpException -> do
-      putStrLn
-        ( "Error from Fastly: " <> tshow httpException <> ". "
-        <> "Easing off the API for " <> tshow backoff <> " seconds."
-        )
-      sleepSeconds backoff
-      return ts
-
--- |A self-contained indexing runner intended to be run within a thread. Wakes
--- up periodically to bulk index documents that it finds in our queue.
-indexingRunner
-  :: BHEnv                 -- ^ Bloodhound (Elasticsearch) env
-  -> Int                   -- ^ Seconds to sleep between bulk flushes
-  -> TBQueue BulkOperation -- ^ Queue to pull documents from
-  -> IO b                  -- ^ Negligible return type
-indexingRunner bh delay q =
-  forever $ do
-    -- See the comment on dequeueOperations for additional information, but
-    -- tl;dr, we should always get _something_ from this action. Note that
-    -- Elasticsearch will error out if we try and index nothing ([])
-    docs <- atomically $ dequeueOperations q
-    esResponse <- indexAnalytics bh docs
-    case esResponse of
-      Left esError -> print esError
-      Right _ -> return ()
-    -- Sleep for a time before performing another bulk operation.
-    sleepSeconds delay
-
--- |Flush Elasticsearch bulk operations that need to be indexed from our queue.
-dequeueOperations
-  :: TBQueue BulkOperation -- ^ Our thread-safe queue
-  -> STM [BulkOperation]   -- ^ Monadic STM return value
-dequeueOperations q = do
-  -- STM paradigms in the Haskell world are very powerful but do require some
-  -- context - here, if `check` fails, the transaction is restarted (it's a form
-  -- of `retry` from the STM library.) However, the runtime will know that we
-  -- tried to read from our queue when we bailed out to retry, so upon finding
-  -- that the queue is empty, the transaction will then block until the queue is
-  -- written to. This is why we don't need to wait/sleep before checking if the
-  -- queue is empty again.
-  queueIsEmpty <- isEmptyTBQueue q
-  check $ not queueIsEmpty
-  flushTBQueue q
-
--- |Retrieve real-time analytics from Fastly (with retries)
-fetchMetrics
-  :: Counter.Counter -- ^ An EKG counter to track request activity
-  -> Text            -- ^ Fastly API key
-  -> Text            -- ^ ID of the Fastly service we want to inspect
-  -> POSIXTime       -- ^ Timestamp for analytics
-  -> IO (Either HttpException (JsonResponse Analytics))
-fetchMetrics counter key service ts = do
-  -- Immediately prior to the Fastly request, hit the counter.
-  Counter.inc counter
-  -- Perform actual API call to Fastly asking for metrics for a service.
-  withRetries ifLeft $
-    fastlyReq FastlyRequest
-              { apiKey = key
-              , timestampReq = Just ts
-              , serviceId = service
-              , service = AnalyticsAPI
-              }

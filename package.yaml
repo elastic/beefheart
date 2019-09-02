@@ -23,7 +23,6 @@ dependencies:
 - base >= 4.7 && < 5
 - bloodhound
 - bytestring
-- classy-prelude
 - data-default
 - ekg
 - ekg-core
@@ -36,21 +35,56 @@ dependencies:
 - optparse-applicative
 - req
 - retry
+- rio
 - scientific
 - stm
 - text
 - time
+- unix
 - unordered-containers
 
 library:
   source-dirs: src
   default-extensions:
+  - AutoDeriveTypeable
+  - BangPatterns
+  - BinaryLiterals
+  - ConstraintKinds
   - DataKinds
+  - DefaultSignatures
+  - DeriveDataTypeable
+  - DeriveFoldable
+  - DeriveFunctor
   - DeriveGeneric
+  - DeriveTraversable
+  - DoAndIfThenElse
+  - EmptyDataDecls
+  - ExistentialQuantification
   - FlexibleContexts
   - FlexibleInstances
+  - FunctionalDependencies
+  - GADTs
+  - GeneralizedNewtypeDeriving
+  - InstanceSigs
+  - KindSignatures
+  - LambdaCase
+  - MonadFailDesugaring
+  - MultiParamTypeClasses
+  - MultiWayIf
+  - NamedFieldPuns
   - NoImplicitPrelude
   - OverloadedStrings
+  - PartialTypeSignatures
+  - PatternGuards
+  - PolyKinds
+  - RankNTypes
+  - RecordWildCards
+  - ScopedTypeVariables
+  - StandaloneDeriving
+  - TupleSections
+  - TypeFamilies
+  - TypeSynonymInstances
+  - ViewPatterns
   ghc-options:
   - -Wall
   - -fno-warn-orphans
@@ -60,11 +94,45 @@ executables:
     main:                Main.hs
     source-dirs:         app
     default-extensions:
+    - AutoDeriveTypeable
+    - BangPatterns
+    - BinaryLiterals
+    - ConstraintKinds
+    - DataKinds
+    - DefaultSignatures
+    - DeriveDataTypeable
+    - DeriveFoldable
+    - DeriveFunctor
     - DeriveGeneric
+    - DeriveTraversable
+    - DoAndIfThenElse
+    - EmptyDataDecls
+    - ExistentialQuantification
     - FlexibleContexts
-    - RecordWildCards
+    - FlexibleInstances
+    - FunctionalDependencies
+    - GADTs
+    - GeneralizedNewtypeDeriving
+    - InstanceSigs
+    - KindSignatures
+    - LambdaCase
+    - MonadFailDesugaring
+    - MultiParamTypeClasses
+    - MultiWayIf
+    - NamedFieldPuns
     - NoImplicitPrelude
     - OverloadedStrings
+    - PartialTypeSignatures
+    - PatternGuards
+    - PolyKinds
+    - RankNTypes
+    - RecordWildCards
+    - ScopedTypeVariables
+    - StandaloneDeriving
+    - TupleSections
+    - TypeFamilies
+    - TypeSynonymInstances
+    - ViewPatterns
     ghc-options:
     - -Wall
     - -threaded
@@ -87,12 +155,46 @@ tests:
     - -optP-Wno-nonportable-include-path
     - -fno-warn-orphans
     default-extensions:
+    - AutoDeriveTypeable
+    - BangPatterns
+    - BinaryLiterals
+    - ConstraintKinds
+    - DataKinds
+    - DefaultSignatures
+    - DeriveDataTypeable
+    - DeriveFoldable
+    - DeriveFunctor
+    - DeriveGeneric
+    - DeriveTraversable
+    - DoAndIfThenElse
+    - EmptyDataDecls
+    - ExistentialQuantification
     - FlexibleContexts
     - FlexibleInstances
+    - FunctionalDependencies
+    - GADTs
+    - GeneralizedNewtypeDeriving
+    - InstanceSigs
+    - KindSignatures
+    - LambdaCase
+    - MonadFailDesugaring
+    - MultiParamTypeClasses
+    - MultiWayIf
+    - NamedFieldPuns
     - NoImplicitPrelude
     - OverloadedStrings
+    - PartialTypeSignatures
+    - PatternGuards
+    - PolyKinds
+    - RankNTypes
+    - RecordWildCards
+    - ScopedTypeVariables
+    - StandaloneDeriving
+    - TupleSections
+    - TypeFamilies
     - TypeOperators
     - TypeSynonymInstances
+    - ViewPatterns
     dependencies:
     - beefheart
     - docker

@@ -2,7 +2,8 @@ module Beefheart.Fastly
     ( fastlyReq
     ) where
 
-import ClassyPrelude
+import RIO
+
 import Control.Monad.Except (runExceptT)
 import Data.Aeson
 import Network.HTTP.Req

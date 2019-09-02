@@ -7,11 +7,13 @@ module Beefheart.Elasticsearch
     , toBulkOperations
     ) where
 
-import           ClassyPrelude
-import           Control.Monad.Catch
+import RIO
+import RIO.Text hiding (filter, map)
+import RIO.Time
+import RIO.Vector hiding (filter, map)
+
 import           Control.Monad.Except (runExceptT)
 import           Data.Aeson
-import           Data.Default (def)
 -- Aeson values are internally represented as `HashMap`s, which we import here
 -- in order to munge them a little bit later.
 import           Data.HashMap.Lazy      hiding (filter, fromList, map)
@@ -43,7 +45,7 @@ checkOrLoad checkUrl loadUrl port' payload = do
   else do
     creation <- req PUT loadUrl (ReqBodyJson payload) ignoreResponse (port port')
     return creation
-  where req'' = runReq def { httpConfigCheckResponse = (\_ _ _ -> Nothing) }
+  where req'' = runReq defaultHttpConfig { httpConfigCheckResponse = (\_ _ _ -> Nothing) }
 
 -- |If the `URL`s to check and PUT JSON are the same, define a little helper
 -- function.

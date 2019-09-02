@@ -1,16 +1,21 @@
 module Beefheart.Utils
-  ( backoffThenGiveUp
+  ( applicationName
+  , backoffThenGiveUp
   , ifLeft
+  , metricN
   , sleepSeconds
   , withRetries
   )
 where
 
-import ClassyPrelude
-import Control.Concurrent
+import RIO
+
 import Control.Retry
-import Data.Either
 import Network.HTTP.Req
+
+-- |Just so we define it in one place
+applicationName :: Text
+applicationName = "beefheart"
 
 -- |Given a monadic action, perform it with retries with a default policy.
 withRetries
@@ -35,6 +40,11 @@ ifLeft
 ifLeft = const (return . isLeft)
 
 -- |Sleep for a given number of seconds in a given thread.
-sleepSeconds :: Int   -- ^ Seconds to sleep
-             -> IO ()
+sleepSeconds :: (MonadIO m)
+             => Int   -- ^ Seconds to sleep
+             -> m ()
 sleepSeconds = threadDelay . (*) (1000 * 1000)
+
+-- |Helper to create EKG metric names
+metricN :: Text -> Text
+metricN n = applicationName <> "." <> n

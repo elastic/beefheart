@@ -1,4 +1,4 @@
-import ClassyPrelude hiding (assert)
+import RIO
 
 import Control.Retry
 import Data.Aeson
