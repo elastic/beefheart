@@ -6,8 +6,11 @@ import Beefheart
 -- is done primarily in order to get a baseline library with more
 -- community-standardized tools like `text` and `async`.
 import RIO
-import RIO.Text hiding (length)
+import RIO.Text hiding (length, null)
 
+import Control.Lens hiding (argument)
+import Data.Aeson
+import Data.Aeson.Lens
 import Data.Text (splitOn)
 import GHC.Natural (intToNatural)
 -- This is our Elasticsearch library.
@@ -120,8 +123,9 @@ cliOptions = CliOptions
       <> value 100
       <> metavar "MAX"
     )
-  -- Finally, some (>= 1) positional arguments for each Fastly service ID.
-  <*> some (argument str (metavar "SERVICE <SERVICE> ..."))
+  -- Finally, positional arguments for each Fastly service ID. This isn't
+  -- `some` since we support service list autodiscovery.
+  <*> many (argument str (metavar "SERVICE <SERVICE> ..."))
 
 -- Executable entrypoint.
 main :: IO ()
@@ -139,25 +143,46 @@ main = do
   case (env', (parseUrl $ encodeUtf8 $ elasticsearchUrl options), parsedPort) of
     -- finding `Nothing` means the API key isn't present, so fail fast here.
     (Left envError, _, _) -> do
-      runSimpleApp $ do
-        logError . display . pack $ "Error: missing key environment variables: " <> envError
-      exitFailure
+      abort $ pack $ "Error: missing key environment variables: " <> envError
 
     -- Getting `Nothing` from parseUrl is no good, either
     (_, Nothing, _) -> do
-      runSimpleApp $ do
-        logError . display $ "Error: couldn't parse elasticsearch URL " <> elasticsearchUrl options
-      exitFailure
+      abort $ "Error: couldn't parse elasticsearch URL "
+           <> elasticsearchUrl options
 
     -- A `Nothing` port means we can't `read` that, either
     (_, _, Nothing) -> do
-      runSimpleApp $ do
-        logError . display $ "Error: couldn't parse elasticsearch port for " <> elasticsearchUrl options
-      exitFailure
+      abort $ "Error: couldn't parse elasticsearch port for "
+           <> elasticsearchUrl options
 
     -- `EnvOptions` only strictly requires a Fastly key, which is guaranteed
     -- present if we make it this far.
     (Right vars, (Just parsedUrl), (Just port')) -> do
+      -- Two modes of operation are supported: explicit list of Fastly
+      -- services, or if they aren't passed, pull in all that we can find over
+      -- the API.
+      services <- if (null $ servicesCli options)
+                  then do
+                    serviceListResponse <- withRetries ifLeft $ fastlyReq FastlyRequest
+                      { apiKey       = (fastlyKey $ vars)
+                      , timestampReq = Nothing
+                      , serviceId    = Nothing
+                      , service      = ServicesAPI
+                      }
+                    case serviceListResponse of
+                      Left err -> abort $ tshow err
+                      Right serviceListJson -> do
+                        let serviceList :: [Text]
+                            serviceList = ((responseBody serviceListJson) :: Value) ^.. key "data" . values . key "id" . _String
+                        runSimpleApp $ do
+                          case serviceList of
+                            [] -> abort $ ("Didn't find any Fastly services to monitor." :: Text)
+                            _ -> logInfo . display $
+                              "Found " <> (tshow $ length serviceList) <> " services."
+                        return serviceList
+                  else
+                    return $ servicesCli options
+
       -- For convenience, we run EKG.
       metricsStore <- EKG.newStore
       EKG.registerGcMetrics metricsStore
@@ -197,7 +222,7 @@ main = do
           $ ((*) (queueScalingFactor options) . intToNatural)
           -- Find the smaller between how many Fastly services we want to watch
           -- versus a hard limit.
-          $ min (length $ services options) (serviceScalingCap options)
+          $ min (length services) (serviceScalingCap options)
 
       -- Setup a log function, then...
       logOptions <- logOptionsHandle stderr (logVerbose options)
@@ -213,6 +238,7 @@ main = do
                   , appBH = bhEnv
                   , appQueue = metricsQueue
                   , appEKG = metricsStore
+                  , appFastlyServices = services
                   }
 
         -- The default Haskell `Prelude` replacement we're using is `RIO`. RIO
@@ -246,7 +272,7 @@ main = do
                             (\_ -> IndexName (esIndex options))
 
           -- Spawn threads for each service which will fetch and queue up documents to be indexed.
-          _metricsThreads <- forM (services $ appCli app) $ \service ->
+          _metricsThreads <- forM services $ \service ->
             async $ metricsRunner app indexNamer service
 
           -- Spin up another thread to report our queue size metrics to EKG.
@@ -265,8 +291,19 @@ main = do
                  <> progDesc
                   ( "Siphons Fastly real-time analytics to Elasticsearch."
                  <> "Requires FASTLY_KEY environment variable for authentication "
-                 <> "and optional ES_USERNAME and ES_PASSWORD for Elasticsearch auth.")
+                 <> "and optional ES_USERNAME and ES_PASSWORD for Elasticsearch auth."
+                 <> "Without a list of service IDs, autodiscover all in Fastly.")
                  <> header ( "a natural black angus beef heart slow-cooked in a "
                           <> "fiery sriracha honey wasabi BBQ sauce and set on "
                           <> "a rotating lazy Susan.")
                )
+
+-- |Log an error and exit the program.
+abort
+  :: (MonadIO m, Display a)
+  => a -- ^ Message to log
+  -> m b
+abort message = do
+  runSimpleApp $ do
+    logError . display $ message
+  exitFailure

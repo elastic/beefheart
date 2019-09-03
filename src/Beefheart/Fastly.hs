@@ -38,7 +38,7 @@ fastlyUrl
 
 -- When we want to hit the real-time analytics API, interpolate the timestamp
 -- with the service ID.
-fastlyUrl FastlyRequest { service = AnalyticsAPI, serviceId = id', timestampReq = t } =
+fastlyUrl FastlyRequest { service = AnalyticsAPI, serviceId = Just id', timestampReq = t } =
   https "rt.fastly.com" /: "v1" /: "channel" /: id' /: "ts" /: toTime t
   where toTime Nothing        = "0"
         -- Failing to truncate/`floor` this time value can have weird effects (a
@@ -46,5 +46,9 @@ fastlyUrl FastlyRequest { service = AnalyticsAPI, serviceId = id', timestampReq 
         toTime (Just theTime) = tshow (floor theTime :: Int)
 
 -- Service API requests help us get details like human-readable name from the service.
-fastlyUrl FastlyRequest { service = ServiceAPI, serviceId = id' } =
+fastlyUrl FastlyRequest { service = ServiceAPI, serviceId = Just id' } =
   https "api.fastly.com" /: "service" /: id'
+
+-- Service API requests help us get details like human-readable name from the service.
+fastlyUrl FastlyRequest { service = ServicesAPI } =
+  https "api.fastly.com" /: "services"

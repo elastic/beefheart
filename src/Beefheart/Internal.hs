@@ -53,7 +53,7 @@ metricsRunner app indexNamer service = do
   serviceDetails <- withRetries ifLeft $ fastlyReq FastlyRequest
     { apiKey       = (fastlyKey $ appEnv app)
     , timestampReq = Nothing
-    , serviceId    = service
+    , serviceId    = Just service
     , service      = ServiceAPI
     }
 
@@ -160,6 +160,6 @@ fetchMetrics counter key service ts = do
     fastlyReq FastlyRequest
               { apiKey = key
               , timestampReq = Just ts
-              , serviceId = service
+              , serviceId = Just service
               , service = AnalyticsAPI
               }

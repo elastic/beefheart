@@ -55,7 +55,7 @@ data CliOptions =
   , queueMetricsWakeup :: Int     -- ^ Period in seconds that the queue metrics thread will wakeup
   , queueScalingFactor :: Natural -- ^ Factor applied to service count for metrics queue
   , serviceScalingCap  :: Int     -- ^ A maximum value for how to scale the in-memory metrics document queue.
-  , services           :: [Text]  -- ^ Which services to collect analytics for.
+  , servicesCli        :: [Text]  -- ^ Which services to collect analytics for.
   }
 
 -- |Enumerates all the environment variables we expect.
@@ -91,12 +91,13 @@ instance ToEnv EnvOptions where
 -- |This is the application environment that RIO requires as its ReaderT value.
 -- This value will be readable from our application context wherever we run it.
 data App = App
-  { appEnv     :: EnvOptions
-  , appCli     :: CliOptions
-  , appLogFunc :: !LogFunc
-  , appBH      :: BHEnv
-  , appQueue   :: TBQueue BulkOperation
-  , appEKG     :: EKG.Store
+  { appBH             :: BHEnv
+  , appCli            :: CliOptions
+  , appEKG            :: EKG.Store
+  , appEnv            :: EnvOptions
+  , appFastlyServices :: [Text]
+  , appLogFunc        :: !LogFunc
+  , appQueue          :: TBQueue BulkOperation
   }
 
 -- |Some boilerplate to support the previous record.
@@ -218,12 +219,12 @@ instance ToJSON ServiceVersion
 data FastlyRequest =
   FastlyRequest
   { apiKey       :: Text
-  , serviceId    :: Text
+  , serviceId    :: Maybe Text
   , timestampReq :: Maybe POSIXTime
   , service      :: FastlyService
   } deriving (Show)
 
-data FastlyService = AnalyticsAPI | ServiceAPI
+data FastlyService = AnalyticsAPI | ServiceAPI | ServicesAPI
                    deriving (Show)
 
 -- Elasticsearch types

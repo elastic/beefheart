@@ -30,6 +30,7 @@ dependencies:
 - exceptions
 - http-client
 - lens
+- lens-aeson
 - monad-loops
 - mtl
 - optparse-applicative
