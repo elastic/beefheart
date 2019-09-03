@@ -69,19 +69,3 @@ extra-deps:
 #
 # Allow a newer minor version of GHC than the snapshot specifies
 # compiler-check: newer-minor
-
-# Build the project within a container
-docker:
-  # This appears not to work, hence the manual pull commands in the Makefile.
-  # Uncomment this once the `stack` bug is fixed.
-  # auto-pull: true
-  enable: false
-  repo: fpco/stack-build-small
-  stack-exe: image
-
-# Instructions for container image builds
-image:
-  containers:
-  - base: fpco/stack-build-small:lts-13.24
-    entrypoints:
-    - beefheart
