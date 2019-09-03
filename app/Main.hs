@@ -165,8 +165,6 @@ main = do
                   then do
                     serviceListResponse <- withRetries ifLeft $ fastlyReq FastlyRequest
                       { apiKey       = (fastlyKey $ vars)
-                      , timestampReq = Nothing
-                      , serviceId    = Nothing
                       , service      = ServicesAPI
                       }
                     case serviceListResponse of

@@ -219,12 +219,12 @@ instance ToJSON ServiceVersion
 data FastlyRequest =
   FastlyRequest
   { apiKey       :: Text
-  , serviceId    :: Maybe Text
-  , timestampReq :: Maybe POSIXTime
   , service      :: FastlyService
   } deriving (Show)
 
-data FastlyService = AnalyticsAPI | ServiceAPI | ServicesAPI
+data FastlyService = AnalyticsAPI Text POSIXTime
+                   | ServiceAPI Text
+                   | ServicesAPI
                    deriving (Show)
 
 -- Elasticsearch types

@@ -52,9 +52,7 @@ metricsRunner app indexNamer service = do
   -- Fetch the service ID's details (to get the human-readable name)
   serviceDetails <- withRetries ifLeft $ fastlyReq FastlyRequest
     { apiKey       = (fastlyKey $ appEnv app)
-    , timestampReq = Nothing
-    , serviceId    = Just service
-    , service      = ServiceAPI
+    , service      = ServiceAPI service
     }
 
   case serviceDetails of
@@ -159,7 +157,5 @@ fetchMetrics counter key service ts = do
   withRetries ifLeft $
     fastlyReq FastlyRequest
               { apiKey = key
-              , timestampReq = Just ts
-              , serviceId = Just service
-              , service = AnalyticsAPI
+              , service = AnalyticsAPI service ts
               }
