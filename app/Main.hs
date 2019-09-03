@@ -77,6 +77,22 @@ cliOptions = CliOptions
       <> value 60
       <> metavar "SECONDS"
     )
+  -- ILM date cutoff to delete indices
+  <*> option auto
+    ( long "ilm-delete-days"
+      <> help "Maximum number of days to retain ILM-managed indices."
+      <> showDefault
+      <> value 180
+      <> metavar "DAYS"
+    )
+  -- ILM active index rollover size
+  <*> option auto
+    ( long "ilm-active-rollover"
+      <> help "Size (in GB) that ILM-managed indices will rollover at."
+      <> showDefault
+      <> value 20
+      <> metavar "GB"
+    )
   <*> switch
     ( long "no-ilm"
       <> help ("Whether or not to rely on ILM for index rotation and curation. "
@@ -230,13 +246,14 @@ main = do
         -- This is our core datatype; our `App` that houses our logging hook,
         -- configuration information, etc.
         let app = App
-                  { appEnv = vars
+                  { appBH = bhEnv
                   , appCli = options
-                  , appLogFunc = lf
-                  , appBH = bhEnv
-                  , appQueue = metricsQueue
                   , appEKG = metricsStore
+                  , appESPort = port'
+                  , appEnv = vars
                   , appFastlyServices = services
+                  , appLogFunc = lf
+                  , appQueue = metricsQueue
                   }
 
         -- The default Haskell `Prelude` replacement we're using is `RIO`. RIO
@@ -250,7 +267,7 @@ main = do
           -- Create any necessary index templates.
           -- TODO should the http request manager be shared?
           let bootstrap :: (Url scheme, b) -> IO (Either HttpException IgnoreResponse)
-              bootstrap = (\x -> bootstrapElasticsearch (noILM options) (esIndex options) (fst x) port')
+              bootstrap = (\x -> bootstrapElasticsearch app (fst x))
           resp <- liftIO $ withRetries ifLeft $ do
             either bootstrap bootstrap parsedUrl
 

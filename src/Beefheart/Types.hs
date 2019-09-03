@@ -49,6 +49,8 @@ data CliOptions =
   , esDatePattern      :: Text    -- ^ Date pattern suffix for Elasticsearch
                                   -- indices (when not using ILM)
   , fastlyBackoff      :: Int     -- ^ Seconds to sleep when encountering Fastly API errors.
+  , ilmDeleteDays      :: Int     -- ^ Max number of days to retain indices
+  , ilmMaxSize         :: Int     -- ^ Max size for active index rollover in GB
   , noILM              :: Bool    -- ^ Whether or not to use ILM for index rotation.
   , logVerbose         :: Bool    -- ^ Whether to log verbosely
   , metricsPort        :: Int     -- ^ Optional port to expose metrics over.
@@ -95,6 +97,7 @@ data App = App
   , appCli            :: CliOptions
   , appEKG            :: EKG.Store
   , appEnv            :: EnvOptions
+  , appESPort         :: Int
   , appFastlyServices :: [Text]
   , appLogFunc        :: !LogFunc
   , appQueue          :: TBQueue BulkOperation

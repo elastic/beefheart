@@ -62,19 +62,22 @@ idempotentLoad url port' body = checkOrLoad url url port' body
 -- this is okay for now.
 bootstrapElasticsearch
   :: (Monad m, MonadIO m)
-  => Bool -- ^ Whether to setup ILM pieces as well
-  -> Text -- ^ Our index name
+  => App -- ^ Application config record
   -> Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host)
-  -> Int -- ^ ES Port
   -> m (Either HttpException IgnoreResponse) -- ^ Return either exception or response headers
-bootstrapElasticsearch noILM esIndex esUrl port' =
-  runExceptT $ do
-    if noILM then do
-      setupTemplate esIndex esUrl port'
-    else do
-      setupTemplate esIndex esUrl port'
-        >> setupILM esUrl port'
-        >> setupAlias esIndex esUrl port'
+bootstrapElasticsearch app esUrl =
+  let idx = esIndex $ appCli app
+      esPort = appESPort app
+      ilmSize = ilmMaxSize $ appCli app
+      ilmDays = ilmDeleteDays $ appCli app
+  in
+    runExceptT $ do
+      if (noILM $ appCli app) then do
+        setupTemplate idx esUrl esPort
+      else do
+        setupTemplate idx esUrl esPort
+          >> setupILM ilmSize ilmDays esUrl esPort
+          >> setupAlias idx esUrl esPort
 
 -- |Configure the index (and alias).
 setupAlias
@@ -98,10 +101,12 @@ setupAlias esIndex esUrl port' =
 -- |Setup ILM policy.
 setupILM
   :: (MonadHttp m)
-  => Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host)
+  => Int -- ^ Max index size before rotation
+  -> Int -- ^ Max days to retain indices
+  -> Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host)
   -> Int -- ^ ES Port
   -> m (IgnoreResponse) -- ^ Return either exception or response headers
-setupILM esUrl port' =
+setupILM gb days esUrl port' =
   idempotentLoad (esUrl /: "_ilm" /: "policy" /: "beefheart") port' ilmPolicy
   where ilmPolicy = toJSON $
           object
@@ -110,12 +115,12 @@ setupILM esUrl port' =
               [ "hot" .= object
                 [ "actions" .= object
                   [ "rollover" .= object
-                    [ "max_size" .= ("20GB" :: Text)
+                    [ "max_size" .= (tshow gb <> "GB" :: Text)
                     ]
                   ]
                 ]
               , "delete" .= object
-                [ "min_age" .= ("180d" :: Text)
+                [ "min_age" .= (tshow days <> "d" :: Text)
                 , "actions" .= object
                   [ "delete" .= object []
                   ]
