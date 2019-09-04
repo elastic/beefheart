@@ -13,6 +13,7 @@ import Control.Monad.Loops (iterateM_)
 import Data.Aeson (FromJSON)
 import Data.Time.Clock.POSIX
 import Database.V5.Bloodhound (BulkOperation, EsError, IndexName)
+import qualified Network.HTTP.Client as HTTP
 import Network.HTTP.Req hiding (header)
 
 import qualified System.Metrics as EKG
@@ -93,11 +94,15 @@ queueMetricsFor backoff q f getter ts = do
       return $ timestamp $ responseBody metrics
     Left httpException -> do
       logError . display $
-        ( "Error from Fastly: " <> tshow httpException <> ". "
+        ( "Error from Fastly: " <> tshow errMsg <> ". "
         <> "Easing off the API for " <> tshow backoff <> " seconds."
         )
       sleepSeconds backoff
       return ts
+      where errMsg = case httpException of
+                       (VanillaHttpException (HTTP.HttpExceptionRequest _ c)) -> show c
+                       (VanillaHttpException (HTTP.InvalidUrlException _ c)) -> c
+                       (JsonHttpException c) -> c
 
 -- |A self-contained indexing runner intended to be run within a thread. Wakes
 -- up periodically to bulk index documents that it finds in our queue.
