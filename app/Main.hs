@@ -288,7 +288,7 @@ main = do
 
           -- Spawn threads for each service which will fetch and queue up documents to be indexed.
           _metricsThreads <- forM services $ \service ->
-            async $ metricsRunner app indexNamer service
+            async $ metricsRunner indexNamer service
 
           -- Spin up another thread to report our queue size metrics to EKG.
           gauge <- liftIO $ EKG.createGauge (metricN "metricsQueue") (appEKG app)
