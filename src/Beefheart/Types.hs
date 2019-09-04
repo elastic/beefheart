@@ -11,17 +11,9 @@ module Beefheart.Types
   , EnvOptions(..)
   , FastlyRequest(..)
   , FastlyService(..)
-  , HasAppQueue
-  , HasBackoffFactor
-  , HasEKG
-  , HasFastlyKey
   , Metrics
   , PointOfPresence
   , ServiceDetails(..)
-  , getAppQueue
-  , getBackoffFactor
-  , getEKG
-  , getFastlyKey
   ) where
 
 import RIO
@@ -114,41 +106,6 @@ data App = App
 -- |Some boilerplate to support the previous record.
 instance HasLogFunc App where
   logFuncL = lens appLogFunc (\x y -> x { appLogFunc = y })
-
--- |We define some Has* typeclasses to more explicitly call out when functions
--- require just one type of thing in our ReaderR/RIO environment.
-
--- |Helper to pull out our application queue from our reader env
-class HasAppQueue env where
-  getAppQueue :: env -> TBQueue BulkOperation
-instance HasAppQueue (TBQueue BulkOperation) where
-  getAppQueue = RIO.id
-instance HasAppQueue App where
-  getAppQueue = appQueue
-
--- |Same as previous, for API backoff factor.
-class HasBackoffFactor env where
-  getBackoffFactor :: env -> Int
-instance HasBackoffFactor Int where
-  getBackoffFactor = RIO.id
-instance HasBackoffFactor App where
-  getBackoffFactor = fastlyBackoff . appCli
-
--- |Helper to pull EKG out of our reader env
-class HasEKG env where
-  getEKG :: env -> EKG.Store
-instance HasEKG EKG.Store where
-  getEKG = RIO.id
-instance HasEKG App where
-  getEKG = appEKG
-
--- |Shortcut to pull Fastly API keys out of RIO env
-class HasFastlyKey env where
-  getFastlyKey :: env -> Text
-instance HasFastlyKey Text where
-  getFastlyKey = RIO.id
-instance HasFastlyKey App where
-  getFastlyKey = fastlyKey . appEnv
 
 -- Fastly types
 --

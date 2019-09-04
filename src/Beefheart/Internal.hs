@@ -40,18 +40,20 @@ queueWatcher app gauge = do
 -- |Self-contained IO action to regularly fetch and queue up metrics for storage
 -- in Elasticsearch.
 metricsRunner
-  :: (MonadReader env m, MonadIO m, HasEKG env, HasFastlyKey env, HasLogFunc env, HasBackoffFactor env, HasAppQueue env)
-  => (POSIXTime -> IndexName)
-  -> Text
+  :: (MonadReader env m, MonadIO m, HasLogFunc env)
+  => EKG.Store -- ^ Our app's metrics value
+  -> Text -- ^ Fastly API key
+  -> Int -- ^ API error backoff factor
+  -> TBQueue BulkOperation -- ^ Where to send the metrics we collect
+  -> (POSIXTime -> IndexName) -- ^ How to name indices
+  -> Text -- ^ The Fastly service ID
   -> m ()
-metricsRunner indexNamer service = do
-  -- Create a metrics counter for this service.
-  env <- ask
-  counter <- liftIO $ EKG.createCounter (metricN $ "requests-" <> service) (getEKG env)
+metricsRunner ekg apiKey backoff q indexNamer service = do
+  counter <- liftIO $ EKG.createCounter (metricN $ "requests-" <> service) ekg
 
   -- Fetch the service ID's details (to get the human-readable name)
   serviceDetails <- withRetries ifLeft $ fastlyReq FastlyRequest
-    { apiKey       = getFastlyKey env
+    { apiKey       = apiKey
     , service      = ServiceAPI service
     }
 
@@ -60,14 +62,14 @@ metricsRunner indexNamer service = do
       logError . display $ "Skipping service " <> service <> ": " <> tshow err
     Right serviceDetailsResponse -> do
       -- Before entering the metrics fetching loop, record the service's details in EKG.
-      liftIO $ EKG.createLabel (metricN service) (getEKG env) >>= flip Label.set serviceName
+      liftIO $ EKG.createLabel (metricN service) ekg >>= flip Label.set serviceName
 
       -- iterateM_ executes a monadic action (here, IO) and runs forever,
       -- feeding the return value into the next iteration, which fits well with
       -- our use case: keep hitting Fastly and feed the previous timestamp into
       -- the next request.
-      iterateM_ (queueMetricsFor (getBackoffFactor env) (getAppQueue env) toDocs getMetrics) 0
-      where getMetrics = fetchMetrics counter (getFastlyKey env) service
+      iterateM_ (queueMetricsFor backoff q toDocs getMetrics) 0
+      where getMetrics = fetchMetrics counter apiKey service
             toDocs = toBulkOperations indexNamer serviceName
             serviceName = name $ responseBody serviceDetailsResponse
 
