@@ -51,7 +51,7 @@ integrationTests m =
     , after AllSucceed "Elasticsearch is UP" $
     -- Then, try installing the index template.
       testCase "Install template" $ do
-        resp <- bootstrapElasticsearch True "fastly" (http "localhost") 9200
+        resp <- bootstrapElasticsearch False 10 10 "fastly" (http "localhost") 9200
         case resp of
            Left exc -> assertFailure $ "Bootstrap failed: " <> show exc
            Right httpResp -> responseStatusCode httpResp @?= 200

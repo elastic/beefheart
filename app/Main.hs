@@ -267,7 +267,13 @@ main = do
           -- Create any necessary index templates.
           -- TODO should the http request manager be shared?
           let bootstrap :: (Url scheme, b) -> IO (Either HttpException IgnoreResponse)
-              bootstrap = (\x -> bootstrapElasticsearch app (fst x))
+              bootstrap = \x ->
+                bootstrapElasticsearch (noILM options)
+                                       (ilmMaxSize options)
+                                       (ilmDeleteDays options)
+                                       (esIndex options)
+                                       (fst x)
+                                       port'
           resp <- liftIO $ withRetries ifLeft $ do
             either bootstrap bootstrap parsedUrl
 

@@ -61,23 +61,22 @@ idempotentLoad url port' body = checkOrLoad url url port' body
 -- index lifecycles. In the future, we shouldn't ignore the json response, but
 -- this is okay for now.
 bootstrapElasticsearch
-  :: (Monad m, MonadIO m)
-  => App -- ^ Application config record
-  -> Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host)
-  -> m (Either HttpException IgnoreResponse) -- ^ Return either exception or response headers
-bootstrapElasticsearch app esUrl =
-  let idx = esIndex $ appCli app
-      esPort = appESPort app
-      ilmSize = ilmMaxSize $ appCli app
-      ilmDays = ilmDeleteDays $ appCli app
-  in
-    runExceptT $ do
-      if (noILM $ appCli app) then do
-        setupTemplate idx esUrl esPort
-      else do
-        setupTemplate idx esUrl esPort
-          >> setupILM ilmSize ilmDays esUrl esPort
-          >> setupAlias idx esUrl esPort
+  :: MonadIO m
+  => Bool -- ^ Whether to enable ILM lifecycle rules
+  -> Int -- ^ ILM size before rotation
+  -> Int -- ^ Max number of days before deletion
+  -> Text -- ^ Index name
+  -> Url scheme -- ^ ES HTTP endpoint
+  -> Int -- ^ ES Port
+  -> m (Either HttpException IgnoreResponse)
+bootstrapElasticsearch ilmDisabled ilmSize ilmDays idx esUrl esPort =
+  runExceptT $ do
+    if ilmDisabled then do
+      setupTemplate idx esUrl esPort
+    else do
+      setupTemplate idx esUrl esPort
+        >> setupILM ilmSize ilmDays esUrl esPort
+        >> setupAlias idx esUrl esPort
 
 -- |Configure the index (and alias).
 setupAlias
