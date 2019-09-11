@@ -216,10 +216,12 @@ encodeMetrics serviceName ts acc pop metrics = mergedObject : acc
                        [ object
                          [ "pointofpresence" .= pop
                          , "service" .= serviceName
-                         , "timestamp" .= (ts * 1000)
+                         , "timestamp" .= formattedTimestamp
                          ]
                        , toJSON metrics
                        ]
+        formattedTimestamp = formatTime defaultTimeLocale (iso8601DateFormat $ Just ("%H:%M:%SZ")) $
+                               posixSecondsToUTCTime ts
 
 -- |Small helper function to take a list of Aeson `Value`s and merge them together.
 -- |source: https://stackoverflow.com/questions/44408359/how-to-merge-aeson-objects

@@ -320,7 +320,7 @@ instance ToJSON AnalyticsMapping where
     [ "_doc" .= object
       [ "properties" .= object
         [ "timestamp" .= object
-          [ "type" .= ("date" :: Text)]
+          [ "type" .= ("date" :: Text) ]
         , "requests" .= object
           [ "type" .= ("long" :: Text) ]
         , "resp_header_bytes" .= object
