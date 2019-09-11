@@ -80,7 +80,15 @@ elasticsearchContainer v = do
             _ <- startContainer defaultStartOpts i
             return i
     where pb = PortBinding 9200 TCP [HostPort "0.0.0.0" 9200]
-          myCreateOpts = addPortBinding pb $ defaultCreateOpts $ "docker.elastic.co/elasticsearch/elasticsearch:" <> v
+          myCreateOpts = addContainerEnv [EnvVar "discovery.type" "single-node"] $
+                           addPortBinding pb $
+                           defaultCreateOpts $ "docker.elastic.co/elasticsearch/elasticsearch:" <> v
+
+-- |Helper to add on environment variables to a container startup
+addContainerEnv :: [EnvVar] -> CreateOpts -> CreateOpts
+addContainerEnv e c = c { containerConfig = config { env = env' <> e } }
+  where config = containerConfig c
+        env' = env config
 
 -- |Stop and remove a container ID.
 containerCleanup :: ContainerID -> IO ()
