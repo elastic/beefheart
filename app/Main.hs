@@ -78,6 +78,14 @@ cliOptions = CliOptions
       <> value 60
       <> metavar "SECONDS"
     )
+  -- Parse the Fastly backoff seconds.
+  <*> option auto
+    ( long "fastly-period"
+      <> help "Polling frequency against the Fastly real-time metrics API"
+      <> showDefault
+      <> value 1
+      <> metavar "SECONDS"
+    )
   -- ILM date cutoff to delete indices
   <*> option auto
     ( long "ilm-delete-days"
@@ -295,7 +303,14 @@ main = do
 
           -- Spawn threads for each service which will fetch and queue up documents to be indexed.
           _metricsThreads <- forM services $ \service ->
-            async $ metricsRunner metricsStore (fastlyKey vars) (fastlyBackoff options) metricsQueue indexNamer service
+            async $ metricsRunner
+              metricsStore
+              (fastlyKey vars)
+              (fastlyPeriod options)
+              (fastlyBackoff options)
+              metricsQueue
+              indexNamer
+              service
 
           -- Spin up another thread to report our queue size metrics to EKG.
           gauge <- liftIO $ EKG.createGauge (metricN "metricsQueue") (appEKG app)

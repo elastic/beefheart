@@ -50,12 +50,15 @@ data CliOptions =
   , esDatePattern      :: Text    -- ^ Date pattern suffix for Elasticsearch
                                   -- indices (when not using ILM)
   , fastlyBackoff      :: Int     -- ^ Seconds to sleep when encountering Fastly API errors.
+  , fastlyPeriod       :: Int     -- ^ How often to request metrics from the Fastly API.
   , ilmDeleteDays      :: Int     -- ^ Max number of days to retain indices
   , ilmMaxSize         :: Int     -- ^ Max size for active index rollover in GB
   , noILM              :: Bool    -- ^ Whether or not to use ILM for index rotation.
   , logVerbose         :: Bool    -- ^ Whether to log verbosely
   , metricsPort        :: Int     -- ^ Optional port to expose metrics over.
-  , queueMetricsWakeup :: Int     -- ^ Period in seconds that the queue metrics thread will wakeup
+  , metricsWakeup      :: Int     -- ^ Period in seconds that the queue metrics
+                                  -- thread will wait for in between
+                                  -- instrumentation measurements
   , queueScalingFactor :: Natural -- ^ Factor applied to service count for metrics queue
   , serviceScalingCap  :: Int     -- ^ A maximum value for how to scale the in-memory metrics document queue.
   , servicesCli        :: [Text]  -- ^ Which services to collect analytics for.

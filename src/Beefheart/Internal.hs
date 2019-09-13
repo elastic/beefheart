@@ -38,7 +38,7 @@ queueWatcher
 queueWatcher app gauge = do
   queueLength <- atomically $ lengthTBQueue (appQueue app)
   liftIO $ Gauge.set gauge $ fromIntegral queueLength
-  sleepSeconds (queueMetricsWakeup $ appCli app)
+  sleepSeconds (metricsWakeup $ appCli app)
   queueWatcher app gauge
 
 -- |Self-contained IO action to regularly fetch and queue up metrics for storage
@@ -47,12 +47,13 @@ metricsRunner
   :: (MonadReader env m, MonadIO m, HasLogFunc env)
   => EKG.Store -- ^ Our app's metrics value
   -> Text -- ^ Fastly API key
+  -> Int -- ^ Period between API calls
   -> Int -- ^ API error backoff factor
   -> TBQueue BulkOperation -- ^ Where to send the metrics we collect
   -> (POSIXTime -> IndexName) -- ^ How to name indices
   -> Text -- ^ The Fastly service ID
   -> m ()
-metricsRunner ekg apiKey backoff q indexNamer service = do
+metricsRunner ekg apiKey period backoff q indexNamer service = do
   counter <- liftIO $ EKG.createCounter (metricN $ "requests-" <> service) ekg
 
   -- Fetch the service ID's details (to get the human-readable name)
@@ -72,7 +73,7 @@ metricsRunner ekg apiKey backoff q indexNamer service = do
       -- feeding the return value into the next iteration, which fits well with
       -- our use case: keep hitting Fastly and feed the previous timestamp into
       -- the next request.
-      iterateM_ (queueMetricsFor backoff q toDocs getMetrics) 0
+      iterateM_ (queueMetricsFor period backoff q toDocs getMetrics) 0
       where getMetrics = fetchMetrics counter apiKey service
             toDocs = toBulkOperations indexNamer serviceName
             serviceName = name $ responseBody serviceDetailsResponse
@@ -82,18 +83,19 @@ metricsRunner ekg apiKey backoff q indexNamer service = do
 -- timestamp, enqueue them, sleep, repeat.
 queueMetricsFor
   :: (MonadIO m, MonadReader env m, HasLogFunc env)
-  => Int -- ^ API backoff factor
+  => Int -- ^ Period between API calls
+  -> Int -- ^ API backoff factor
   -> TBQueue BulkOperation -- ^ Our application's metrics queue.
   -> (Analytics -> [BulkOperation]) -- ^ A function to transform our metrics into ES bulk operations
   -> (POSIXTime -> m (Either HttpException (JsonResponse Analytics))) -- ^ Function to get metrics for a timestamp
   -> POSIXTime -- ^ The actual metrics timestamp we want
   -> m POSIXTime -- ^ Return the new POSIXTime for the subsequent request
-queueMetricsFor backoff q f getter ts = do
+queueMetricsFor period backoff q f getter ts = do
   response <- getter ts
   case response of
     Right metrics -> do
       atomically $ mapM_ (writeTBQueue q) (f (responseBody metrics))
-      sleepSeconds 1
+      sleepSeconds period
       return $ timestamp $ responseBody metrics
     Left httpException -> do
       logError . display $
