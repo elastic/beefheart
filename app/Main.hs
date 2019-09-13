@@ -16,8 +16,8 @@ import GHC.Natural (intToNatural)
 -- This is our Elasticsearch library.
 import Database.V5.Bloodhound hiding (esUsername, esPassword, key, name)
 -- Think of the equivalent to python's `requests`
-import qualified Network.HTTP.Client as HTTP
 import Network.HTTP.Req hiding (header)
+import qualified Network.HTTP.Client as HTTP
 -- CLI option parsing.
 import Options.Applicative
 -- Environment variable parsing.
