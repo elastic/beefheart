@@ -49,6 +49,11 @@ checkOrLoad checkUrl loadUrl port' payload = do
   else do
     creation <- req PUT loadUrl (ReqBodyJson payload) ignoreResponse (port port')
     return creation
+  -- We wrap the `Req` library's `runReq` here in order to override exception
+  -- catching behavior. Normally, the library actually throws an exception when
+  -- it encounters a non-2xx respose code (weird, right?). Instead we swallow
+  -- it so that we can explicitly check the response code with normal control
+  -- flow.
   where req'' = runReq defaultHttpConfig { httpConfigCheckResponse = (\_ _ _ -> Nothing) }
 
 -- |If the `URL`s to check and PUT JSON are the same, define a little helper
@@ -169,7 +174,15 @@ indexAnalytics es operations = do
   response <- recovering backoffThenGiveUp [shouldRetry] esRequest
   parseEsResponse response
   where
+    -- `esRequest` ends up being the Thing We Want to Run
     esRequest = return $ runBH es . bulk . fromList $ operations
+    -- `shouldRetry` gets handed a `RetryStatus` whenever `recovering` consults
+    -- it to determine if it should actually retry the action (and as long as
+    -- the policy allows it). It needs to implement a `Handler`, which accepts
+    -- an exception type and hands back a boolean indicating whether to
+    -- proceed. We're dumb here and just say we should always retry requests -
+    -- our policy will eventually give up, but we'll persist through timeouts
+    -- or disconnections.
     shouldRetry retryStatus = Handler $ \(_ :: HTTP.HttpException) -> do
       logError . display $
         "Failed bulk request to Elasticsearch. Failed " <> (tshow $ rsIterNumber retryStatus) <> " times so far."
