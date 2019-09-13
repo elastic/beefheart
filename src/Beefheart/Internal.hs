@@ -7,8 +7,11 @@ module Beefheart.Internal
   , queueWatcher
   ) where
 
-import RIO
+import RIO hiding (error)
+import qualified RIO.HashMap as HM
+
 import Control.Concurrent.STM.TBQueue (flushTBQueue, lengthTBQueue)
+import Control.Monad.Catch (MonadMask)
 import Control.Monad.Loops (iterateM_)
 import Data.Aeson (FromJSON)
 import Data.Time.Clock.POSIX
@@ -107,7 +110,7 @@ queueMetricsFor backoff q f getter ts = do
 -- |A self-contained indexing runner intended to be run within a thread. Wakes
 -- up periodically to bulk index documents that it finds in our queue.
 indexingRunner
-  :: (MonadIO m, MonadThrow m, MonadReader env m, HasLogFunc env)
+  :: (MonadReader env m, MonadMask m, MonadIO m, HasLogFunc env)
   => App
   -> m b
 indexingRunner app = do
@@ -118,7 +121,8 @@ indexingRunner app = do
   esResponse <- indexAnalytics (appBH app) docs
   case esResponse of
     Left esError -> logError $ display esError
-    Right _ -> return ()
+    Right bulkResponse -> logDebug $ "Indexed " <> indexed <> " docs"
+      where indexed = display $ length $ filter isNothing $ map error $ concatMap HM.elems $ items bulkResponse
   -- Sleep for a time before performing another bulk operation.
   sleepSeconds (esFlushDelay $ appCli app)
   indexingRunner app

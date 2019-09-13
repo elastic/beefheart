@@ -5,6 +5,7 @@ module Beefheart.Types
   , AnalyticsMapping(..)
   , App(..)
   , Bucket
+  , BulkItem(..)
   , BulkResponse(..)
   , CliOptions(..)
   , Datacenter(..)

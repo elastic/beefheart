@@ -6,6 +6,7 @@ import Beefheart
 -- is done primarily in order to get a baseline library with more
 -- community-standardized tools like `text` and `async`.
 import RIO
+import RIO.Orphans ()
 import RIO.Text hiding (length, null)
 
 import Control.Lens hiding (argument)

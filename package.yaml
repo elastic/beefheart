@@ -37,6 +37,7 @@ dependencies:
 - req
 - retry
 - rio
+- rio-orphans
 - scientific
 - stm
 - text

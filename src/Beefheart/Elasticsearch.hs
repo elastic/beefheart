@@ -7,12 +7,14 @@ module Beefheart.Elasticsearch
     , toBulkOperations
     ) where
 
-import RIO
+import RIO hiding (Handler)
 import RIO.Text hiding (filter, map)
 import RIO.Time
 import RIO.Vector hiding (filter, map)
 
 import           Control.Monad.Except (runExceptT)
+import           Control.Monad.Catch (Handler(..), MonadMask)
+import           Control.Retry
 import           Data.Aeson
 -- Aeson values are internally represented as `HashMap`s, which we import here
 -- in order to munge them a little bit later.
@@ -21,8 +23,10 @@ import qualified Data.HashMap.Lazy      as      HML
 import           Data.Time.Clock.POSIX
 import           Database.V5.Bloodhound hiding (Bucket)
 import           Network.HTTP.Req
+import qualified Network.HTTP.Client as HTTP
 
 import Beefheart.Types
+import Beefheart.Utils
 
 -- |Since we'll try and be forward-compatible, work with just one ES type of
 -- |`doc`
@@ -152,13 +156,24 @@ setupTemplate esIndex esUrl port' =
 -- |Given a Bloodhound environment and a list of operations, run bulk indexing
 -- and get a response back.
 indexAnalytics
-  :: (MonadIO m, MonadThrow m)
+  :: (MonadIO m, MonadMask m, MonadReader env m, HasLogFunc env)
   => BHEnv                           -- ^ Bloodhound environment
   -> [BulkOperation]                 -- ^ List of operations to index
   -> m (Either EsError BulkResponse) -- ^ Bulk request response
 indexAnalytics es operations = do
-  response <- runBH es . bulk . fromList $ operations
+  -- `recovering` is a retry higher-order function that we can use to wrap
+  -- around functions that may throw exceptions. It takes a policy (which we
+  -- have a central definition for elsewhere) that dictates how we backoff, a
+  -- function that gets called for each failure, and finally our monadic action
+  -- to run.
+  response <- recovering backoffThenGiveUp [shouldRetry] esRequest
   parseEsResponse response
+  where
+    esRequest = return $ runBH es . bulk . fromList $ operations
+    shouldRetry retryStatus = Handler $ \(_ :: HTTP.HttpException) -> do
+      logError . display $
+        "Failed bulk request to Elasticsearch. Failed " <> (tshow $ rsIterNumber retryStatus) <> " times so far."
+      return True
 
 -- |Helper to take a response from Fastly and form it into a bulk operation for
 -- Elasticsearch. The output from this is expected to be fed into
