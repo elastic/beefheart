@@ -231,10 +231,15 @@ encodeMetrics serviceName ts acc pop metrics = mergedObject : acc
                        [ object
                          [ "pointofpresence" .= pop
                          , "service" .= serviceName
+                         -- Formatting the timestamp explicitly instead of
+                         -- using a unix-style epoch timestamp avoids ambiguity
+                         -- that I observed between versions 6 and 7 of
+                         -- Elasticsearch.
                          , "timestamp" .= formattedTimestamp
                          ]
                        , toJSON metrics
                        ]
+        -- This value ends up looking like "2019-09-13T18:00:00Z"
         formattedTimestamp = formatTime defaultTimeLocale (iso8601DateFormat $ Just ("%H:%M:%SZ")) $
                                posixSecondsToUTCTime ts
 
