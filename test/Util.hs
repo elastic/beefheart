@@ -75,7 +75,7 @@ elasticsearchContainer v = do
   runDockerT (defaultClientOpts, h) $ do
     cid <- createContainer myCreateOpts Nothing
     case cid of
-        Left err -> error $ show err
+        Left err -> RIO.error $ show err
         Right i -> do
             _ <- startContainer defaultStartOpts i
             return i
@@ -86,7 +86,11 @@ elasticsearchContainer v = do
 
 -- |Helper to add on environment variables to a container startup
 addContainerEnv :: [EnvVar] -> CreateOpts -> CreateOpts
-addContainerEnv e c = c { containerConfig = config { env = env' <> e } }
+addContainerEnv e c =
+  -- All we do here is re-construct a `CreateOpts` value with the
+  -- containerConfig.env value appended with the `e` environment variable pair
+  -- we pass in.
+  c { containerConfig = config { env = env' <> e } }
   where config = containerConfig c
         env' = env config
 
@@ -97,9 +101,9 @@ containerCleanup cid = do
   runDockerT (defaultClientOpts, h) $ do
     r <- stopContainer DefaultTimeout cid
     case r of
-        Left err -> error $ "I failed to stop the container:" <> show err
+        Left err -> RIO.error $ "I failed to stop the container:" <> show err
         Right _ -> do
           d <- deleteContainer defaultContainerDeleteOpts cid
           case d of
-            Left err' -> error $ "Couldn't delete container: " <> show err'
+            Left err' -> RIO.error $ "Couldn't delete container: " <> show err'
             Right _ -> return ()

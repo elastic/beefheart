@@ -1,4 +1,5 @@
 import RIO
+import RIO.Orphans ()
 
 import Control.Retry
 import Data.Aeson
@@ -61,7 +62,7 @@ integrationTests m =
         let toBulk = toBulkOperations "fastly" "%Y" "myservice"
         analytics <- (generate $ listOf1 arbitrary) :: IO ([Analytics])
         let documents = analytics >>= toBulk
-        bulkResp <- indexAnalytics bh documents
+        bulkResp <- runSimpleApp $ indexAnalytics bh documents
         case bulkResp of
           Left _ -> assertFailure $ "Bad response from Elasticsearch: " <> show bulkResp
           Right esResp -> do
