@@ -9,9 +9,6 @@ import RIO
 import RIO.Orphans ()
 import RIO.Text hiding (length, null)
 
-import Control.Lens hiding (argument)
-import Data.Aeson
-import Data.Aeson.Lens
 import Data.Text (splitOn)
 import GHC.Natural (intToNatural)
 -- This is our Elasticsearch library.
@@ -188,21 +185,7 @@ main = do
       -- the API.
       services <- if (null $ servicesCli options)
                   then do
-                    serviceListResponse <- withRetries ifLeft $ fastlyReq FastlyRequest
-                      { apiKey       = (fastlyKey $ vars)
-                      , service      = ServicesAPI
-                      }
-                    case serviceListResponse of
-                      Left err -> abort $ tshow err
-                      Right serviceListJson -> do
-                        let serviceList :: [Text]
-                            serviceList = ((responseBody serviceListJson) :: Value) ^.. key "data" . values . key "id" . _String
-                        runSimpleApp $ do
-                          case serviceList of
-                            [] -> abort $ ("Didn't find any Fastly services to monitor." :: Text)
-                            _ -> logInfo . display $
-                              "Found " <> (tshow $ length serviceList) <> " services."
-                        return serviceList
+                    autodiscoverServices (fastlyKey vars)
                   else
                     return $ servicesCli options
 
@@ -334,13 +317,3 @@ main = do
                           <> "fiery sriracha honey wasabi BBQ sauce and set on "
                           <> "a rotating lazy Susan.")
                )
-
--- |Log an error and exit the program.
-abort
-  :: (MonadIO m, Display a)
-  => a -- ^ Message to log
-  -> m b
-abort message = do
-  runSimpleApp $ do
-    logError . display $ message
-  exitFailure

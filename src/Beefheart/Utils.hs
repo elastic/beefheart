@@ -1,5 +1,6 @@
 module Beefheart.Utils
-  ( applicationName
+  ( abort
+  , applicationName
   , backoffThenGiveUp
   , ifLeft
   , metricN
@@ -16,6 +17,16 @@ import Network.HTTP.Req
 -- |Just so we define it in one place
 applicationName :: Text
 applicationName = "beefheart"
+
+-- |Log an error and exit the program.
+abort
+  :: (MonadIO m, Display a)
+  => a -- ^ Message to log
+  -> m b
+abort message = do
+  runSimpleApp $ do
+    logError . display $ message
+  exitFailure
 
 -- |Given a monadic action, perform it with retries with a default policy.
 withRetries

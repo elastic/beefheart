@@ -1,14 +1,18 @@
 module Beefheart.Fastly
-    ( fastlyReq
+    ( autodiscoverServices
+    , fastlyReq
     ) where
 
 import RIO
 
+import Control.Lens hiding (argument)
 import Control.Monad.Except (runExceptT)
 import Data.Aeson
+import Data.Aeson.Lens
 import Network.HTTP.Req
 
 import Beefheart.Types
+import Beefheart.Utils
 
 -- |Retrieve a JSON response from Fastly. This function's signature errs on the
 -- loosey-goosey side of polymorphism, so the `JsonResponse` need only be a
@@ -48,3 +52,29 @@ fastlyUrl (ServiceAPI serviceId) =
 -- Service API requests help us get details like human-readable name from the service.
 fastlyUrl ServicesAPI =
   https "api.fastly.com" /: "services"
+
+-- |Helper function that grabs all available services within a Fastly account.
+autodiscoverServices
+  :: MonadIO m -- ^ Monad to run our HTTP requests within
+  => Text -- ^ Fastly API Key
+  -> m [Text] -- ^ List of Fastly service IDs
+autodiscoverServices key' = do
+  serviceListResponse <- withRetries ifLeft $ fastlyReq FastlyRequest
+    { apiKey  = key'
+    , service = ServicesAPI
+    }
+  case serviceListResponse of
+    Left err -> abort $ tshow err
+    Right serviceListJson -> do
+      -- In order to pull out the list of service IDs from the Fastly response,
+      -- we use some lens operators like `^..` to poke at the json response in
+      -- a more succinct way. This sequence of functions says "grab a list of
+      -- values from the 'data' key, flatten out the structure into plain
+      -- key/value pairs, and return the 'id' key of each as a `String`".
+      let serviceList = ((responseBody serviceListJson) :: Value) ^.. key "data" . values . key "id" . _String
+      runSimpleApp $ do
+        case serviceList of
+          [] -> abort $ ("Didn't find any Fastly services to monitor." :: Text)
+          _ -> logInfo . display $
+            "Found " <> (tshow $ length serviceList) <> " services."
+      return serviceList
