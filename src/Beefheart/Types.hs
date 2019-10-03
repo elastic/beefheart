@@ -101,7 +101,6 @@ data App = App
   , appCli            :: CliOptions
   , appEKG            :: EKG.Store
   , appEnv            :: EnvOptions
-  , appESPort         :: Int
   , appFastlyServices :: [Text]
   , appLogFunc        :: !LogFunc
   , appQueue          :: TBQueue BulkOperation

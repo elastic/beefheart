@@ -9,7 +9,6 @@ import RIO
 import RIO.Orphans ()
 import RIO.Text hiding (length, null)
 
-import Data.Text (splitOn)
 import GHC.Natural (intToNatural)
 -- This is our Elasticsearch library.
 import Database.V5.Bloodhound hiding (esUsername, esPassword, key, name)
@@ -19,8 +18,7 @@ import qualified Network.HTTP.Client as HTTP
 -- CLI option parsing.
 import Options.Applicative
 -- Environment variable parsing.
-import System.Envy hiding (Parser)
-import Text.Read (readMaybe)
+import System.Envy hiding (Option, Parser)
 
 -- EKG is a high-level process metrics collection and introspection library - by
 -- default, its interface will be available over http://localhost:8000 after
@@ -154,32 +152,24 @@ main :: IO ()
 main = do
   -- Convenient, simple argument parser. This will short-circuit execution in
   -- the event of --help or missing required arguments.
-  options <- execParser opts
+  options <- execParser cliOpts
   -- Similar case for environment variables.
   env' <- decodeEnv :: IO (Either String EnvOptions)
-  let parsedPort = case splitOn ":" (elasticsearchUrl options) of
-                     (_scheme:_host:p:[]) -> readMaybe $ unpack p
-                     _ -> Nothing
 
   -- A top-level case pattern match is easier to grok for particular failures
-  case (env', (parseUrl $ encodeUtf8 $ elasticsearchUrl options), parsedPort) of
+  case (env', parseUrl $ encodeUtf8 $ elasticsearchUrl options) of
     -- finding `Nothing` means the API key isn't present, so fail fast here.
-    (Left envError, _, _) -> do
+    (Left envError, _) -> do
       abort $ pack $ "Error: missing key environment variables: " <> envError
 
     -- Getting `Nothing` from parseUrl is no good, either
-    (_, Nothing, _) -> do
+    (_, Nothing) -> do
       abort $ "Error: couldn't parse elasticsearch URL "
-           <> elasticsearchUrl options
-
-    -- A `Nothing` port means we can't `read` that, either
-    (_, _, Nothing) -> do
-      abort $ "Error: couldn't parse elasticsearch port for "
            <> elasticsearchUrl options
 
     -- `EnvOptions` only strictly requires a Fastly key, which is guaranteed
     -- present if we make it this far.
-    (Right vars, (Just parsedUrl), (Just port')) -> do
+    (Right vars, (Just parsedUrl)) -> do
       -- Two modes of operation are supported: explicit list of Fastly
       -- services, or if they aren't passed, pull in all that we can find over
       -- the API.
@@ -203,11 +193,15 @@ main = do
       -- present.
       httpManager <- HTTP.newManager HTTP.defaultManagerSettings
       let bhEnv' = mkBHEnv (Server $ elasticsearchUrl options) httpManager
-          bhEnv = case (esUsername vars, esPassword vars) of
+          (bhEnv, reqAuth) = case (esUsername vars, esPassword vars) of
                     (Just u, Just p) ->
-                      bhEnv' { bhRequestHook = basicAuthHook (EsUsername u) (EsPassword p) }
+                      ( bhEnv' { bhRequestHook = basicAuthHook (EsUsername u) (EsPassword p) }
+                      , Just ((encodeUtf8 u), (encodeUtf8 p))
+                      )
                     _ ->
-                      bhEnv'
+                      ( bhEnv'
+                      , Nothing
+                      )
 
       -- To retrieve and index our metrics safely between threads, use an STM
       -- Queue to communicate between consumers and producers. Important to note
@@ -241,7 +235,6 @@ main = do
                   { appBH = bhEnv
                   , appCli = options
                   , appEKG = metricsStore
-                  , appESPort = port'
                   , appEnv = vars
                   , appFastlyServices = services
                   , appLogFunc = lf
@@ -258,14 +251,14 @@ main = do
           --
           -- Create any necessary index templates.
           -- TODO should the http request manager be shared?
-          let bootstrap :: (Url scheme, b) -> IO (Either HttpException IgnoreResponse)
-              bootstrap = \x ->
+          let bootstrap :: (Url scheme, Option scheme) -> IO (Either HttpException IgnoreResponse)
+              bootstrap url =
                 bootstrapElasticsearch (noILM options)
                                        (ilmMaxSize options)
                                        (ilmDeleteDays options)
                                        (esIndex options)
-                                       (fst x)
-                                       port'
+                                       url
+                                       reqAuth
           resp <- liftIO $ withRetries ifLeft $ do
             either bootstrap bootstrap parsedUrl
 
@@ -306,7 +299,7 @@ main = do
           indexingRunner app
 
   -- This is where we instantiate our option parser.
-  where opts = info (cliOptions <**> helper)
+  where cliOpts = info (cliOptions <**> helper)
                ( fullDesc -- beefheart
                  <> progDesc
                   ( "Siphons Fastly real-time analytics to Elasticsearch."

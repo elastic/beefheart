@@ -38,16 +38,16 @@ mappingName = MappingName "_doc"
 checkOrLoad :: (ToJSON a, MonadHttp m)
             => Url scheme       -- ^ `URL` to check
             -> Url scheme       -- ^ `URL` to use to load the json
-            -> Int              -- ^ ES Port
+            -> Option scheme    -- ^ HTTP options such as port, user auth, etc.
             -> a                -- ^ Potential `ToJSON` value to load
             -> m IgnoreResponse -- ^ Body-less response (useful for response code?)
-checkOrLoad checkUrl loadUrl port' payload = do
-  response <- req'' $ req HEAD checkUrl NoReqBody ignoreResponse (port port')
+checkOrLoad checkUrl loadUrl opts payload = do
+  response <- req'' $ req HEAD checkUrl NoReqBody ignoreResponse opts
   if responseStatusCode response == 200
   then do
     return response
   else do
-    creation <- req PUT loadUrl (ReqBodyJson payload) ignoreResponse (port port')
+    creation <- req PUT loadUrl (ReqBodyJson payload) ignoreResponse opts
     return creation
   -- We wrap the `Req` library's `runReq` here in order to override exception
   -- catching behavior. Normally, the library actually throws an exception when
@@ -61,10 +61,10 @@ checkOrLoad checkUrl loadUrl port' payload = do
 idempotentLoad
   :: (ToJSON a, MonadHttp m)
   => Url scheme       -- ^ Single `URL` point to both `HEAD` and `POST`
-  -> Int              -- ^ ES Port
+  -> Option scheme    -- ^ HTTP options such as port, user auth, etc.
   -> a                -- ^ Potential JSON payload
   -> m IgnoreResponse -- ^ `MonadHttp` `m` returning response `HEAD`
-idempotentLoad url port' body = checkOrLoad url url port' body
+idempotentLoad url opts body = checkOrLoad url url opts body
 
 -- |Simple one-off to set up necessary ES indices and other machinery like
 -- index lifecycles. In the future, we shouldn't ignore the json response, but
@@ -75,27 +75,30 @@ bootstrapElasticsearch
   -> Int -- ^ ILM size before rotation
   -> Int -- ^ Max number of days before deletion
   -> Text -- ^ Index name
-  -> Url scheme -- ^ ES HTTP endpoint
-  -> Int -- ^ ES Port
+  -> (Url scheme, Option scheme) -- ^ ES HTTP endpoint
+  -> Maybe (ByteString, ByteString) -- ^ HTTP options such as port, user auth, etc.
   -> m (Either HttpException IgnoreResponse)
-bootstrapElasticsearch ilmDisabled ilmSize ilmDays idx esUrl esPort =
+bootstrapElasticsearch ilmDisabled ilmSize ilmDays idx (esUrl, urlOpts) auth =
   runExceptT $ do
     if ilmDisabled then do
-      setupTemplate idx esUrl esPort
+      setupTemplate idx esUrl reqOpts
     else do
-      setupTemplate idx esUrl esPort
-        >> setupILM ilmSize ilmDays esUrl esPort
-        >> setupAlias idx esUrl esPort
+      setupTemplate idx esUrl reqOpts
+        >> setupILM ilmSize ilmDays esUrl reqOpts
+        >> setupAlias idx esUrl reqOpts
+  where toBasicAuth (Just (u, p)) = basicAuthUnsafe u p
+        toBasicAuth _ = mempty
+        reqOpts = urlOpts <> toBasicAuth auth
 
 -- |Configure the index (and alias).
 setupAlias
   :: (MonadHttp m)
   => Text  -- ^ Our index name
   -> Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host)
-  -> Int -- ^ ES Port
+  -> Option scheme -- ^ HTTP options such as port, user auth, etc.
   -> m (IgnoreResponse) -- ^ Return either exception or response headers
-setupAlias esIndex esUrl port' =
-  checkOrLoad (esUrl /: "_alias" /: esIndex) (esUrl /: indexName) port' newIndex
+setupAlias esIndex esUrl opts =
+  checkOrLoad (esUrl /: "_alias" /: esIndex) (esUrl /: indexName) opts newIndex
   where indexName = (esIndex <> "-000001")
         newIndex = toJSON $
           object
@@ -112,10 +115,10 @@ setupILM
   => Int -- ^ Max index size before rotation
   -> Int -- ^ Max days to retain indices
   -> Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host)
-  -> Int -- ^ ES Port
+  -> Option scheme -- ^ HTTP options such as port, user auth, etc.
   -> m (IgnoreResponse) -- ^ Return either exception or response headers
-setupILM gb days esUrl port' =
-  idempotentLoad (esUrl /: "_ilm" /: "policy" /: "beefheart") port' ilmPolicy
+setupILM gb days esUrl opts =
+  idempotentLoad (esUrl /: "_ilm" /: "policy" /: "beefheart") opts ilmPolicy
   where ilmPolicy = toJSON $
           object
           [ "policy" .= object
@@ -142,10 +145,10 @@ setupTemplate
   :: (MonadHttp m)
   => Text  -- ^ Our index name
   -> Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host)
-  -> Int -- ^ ES Port
+  -> Option scheme -- ^ HTTP options such as port, user auth, etc.
   -> m (IgnoreResponse) -- ^ Return either exception or response headers
-setupTemplate esIndex esUrl port' =
-  idempotentLoad (esUrl /: "_template" /: "beefheart") port' analyticsTemplate
+setupTemplate esIndex esUrl opts =
+  idempotentLoad (esUrl /: "_template" /: "beefheart") opts analyticsTemplate
   where analyticsTemplate = toJSON $
           object
           [ "index_patterns" .= [ esIndex <> "*" ]
