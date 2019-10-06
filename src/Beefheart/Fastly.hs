@@ -6,7 +6,6 @@ module Beefheart.Fastly
 import RIO
 
 import Control.Lens hiding (argument)
-import Control.Monad.Except (runExceptT)
 import Data.Aeson
 import Data.Aeson.Lens
 import Network.HTTP.Req
@@ -19,19 +18,13 @@ import Beefheart.Utils
 -- member of the `FromJSON` typeclass. Although this makes the function very
 -- generic, a type annotation may be necessary when called in order to nudge the
 -- compiler in the right direction.
---
--- This function makes an effort to avoid exceptions by using `Either` so that
--- error handling can be explicitly checked by the compiler.
---
--- The `req` library makes this fairly straightforward, and running it in
--- `runExceptT` ensures any exceptions are caught within the `Either` monad.
 fastlyReq
-  :: (FromJSON a , MonadIO m)
+  :: (FromJSON a , MonadHttp m)
   => FastlyRequest -- ^ We wrap various request parameters in a record to avoid
                    -- a massive function signature.
-  -> m (Either HttpException (JsonResponse a))
+  -> m (JsonResponse a)
 fastlyReq requestPayload =
-  runExceptT $ req GET (fastlyUrl $ service requestPayload) NoReqBody jsonResponse options
+  req GET (fastlyUrl $ service requestPayload) NoReqBody jsonResponse options
   where options = header "Fastly-Key" $ encodeUtf8 $ apiKey requestPayload
 
 -- |Helper to form a request URL given a `FastlyRequest`. Broken apart via
@@ -55,26 +48,24 @@ fastlyUrl ServicesAPI =
 
 -- |Helper function that grabs all available services within a Fastly account.
 autodiscoverServices
-  :: MonadIO m -- ^ Monad to run our HTTP requests within
+  :: MonadHttp m -- ^ Monad to run our HTTP requests within
   => Text -- ^ Fastly API Key
   -> m [Text] -- ^ List of Fastly service IDs
 autodiscoverServices key' = do
-  serviceListResponse <- withRetries ifLeft $ fastlyReq FastlyRequest
+  serviceListResponse <- fastlyReq FastlyRequest
     { apiKey  = key'
     , service = ServicesAPI
     }
-  case serviceListResponse of
-    Left err -> abort $ tshow err
-    Right serviceListJson -> do
-      -- In order to pull out the list of service IDs from the Fastly response,
-      -- we use some lens operators like `^..` to poke at the json response in
-      -- a more succinct way. This sequence of functions says "grab a list of
-      -- values from the 'data' key, flatten out the structure into plain
-      -- key/value pairs, and return the 'id' key of each as a `String`".
-      let serviceList = ((responseBody serviceListJson) :: Value) ^.. key "data" . values . key "id" . _String
-      runSimpleApp $ do
-        case serviceList of
-          [] -> abort $ ("Didn't find any Fastly services to monitor." :: Text)
-          _ -> logInfo . display $
-            "Found " <> (tshow $ length serviceList) <> " services."
-      return serviceList
+
+  -- In order to pull out the list of service IDs from the Fastly response,
+  -- we use some lens operators like `^..` to poke at the json response in
+  -- a more succinct way. This sequence of functions says "grab a list of
+  -- values from the 'data' key, flatten out the structure into plain
+  -- key/value pairs, and return the 'id' key of each as a `String`".
+  let serviceList = ((responseBody serviceListResponse) :: Value) ^.. key "data" . values . key "id" . _String
+  runSimpleApp $ do
+    case serviceList of
+      [] -> abort $ ("Didn't find any Fastly services to monitor." :: Text)
+      _ -> logInfo . display $
+        "Found " <> (tshow $ length serviceList) <> " services."
+  return serviceList

@@ -6,12 +6,16 @@ module Beefheart.Types
   , App(..)
   , Bucket
   , BulkItem(..)
+  , BulkOperation(..)
   , BulkResponse(..)
   , CliOptions(..)
   , Datacenter(..)
+  , ElasticsearchURI
   , EnvOptions(..)
   , FastlyRequest(..)
   , FastlyService(..)
+  , IndexName(..)
+  , MappingName(..)
   , Metrics
   , PointOfPresence
   , ServiceDetails(..)
@@ -21,7 +25,7 @@ import RIO
 import RIO.Char
 import RIO.Time
 
-import Control.Monad.Except (ExceptT, throwError)
+import Control.Exception.Safe
 import Data.Aeson
 -- My initial type specified simple numeric types, but some values from Fastly
 -- (particularly initial values from the first request) can be exceptionally
@@ -29,16 +33,22 @@ import Data.Aeson
 -- problems.
 import Data.Scientific
 import Data.Time.Clock.POSIX (POSIXTime)
-import Database.V5.Bloodhound (BHEnv, BulkOperation)
 import Network.HTTP.Req
-import System.Envy hiding (Parser, (.=))
+import System.Envy hiding (Option, Parser, (.=))
 
 import qualified System.Envy as E
 import qualified System.Metrics as EKG
 
--- |Required in order to run our HTTP request in various spots.
-instance (MonadIO m) => MonadHttp (ExceptT HttpException m) where
-  handleHttpException = throwError
+import Beefheart.Utils
+
+-- |This is a little type alias to shorten some signatures later on. The tl;dr
+-- is that although the `Req` library is great, it has one trait that makes it
+-- kind of hard to use: it is _very_ strict about HTTP versus HTTPS. It'll
+-- parse a URL but won't let you dynamically write some function signatures in
+-- terms of the schema dynamically, so we end up having to preserve the
+-- possibility of either value sort of laboriously. Not really ideal, but it is
+-- what it is.
+type ElasticsearchURI = Either (Url 'Http, Option 'Http) (Url 'Https, Option 'Https)
 
 -- |Command-line arguments are defined at the top-level as a well-defined type.
 data CliOptions =
@@ -49,8 +59,10 @@ data CliOptions =
   , esIndex            :: Text    -- ^ Index prefix for Elasticsearch documents.
   , esDatePattern      :: Text    -- ^ Date pattern suffix for Elasticsearch
                                   -- indices (when not using ILM)
-  , fastlyBackoff      :: Int     -- ^ Seconds to sleep when encountering Fastly API errors.
   , fastlyPeriod       :: Int     -- ^ How often to request metrics from the Fastly API.
+  , httpRetryLimit     :: Int     -- ^ Maximum time (in seconds) HTTP requests
+                                  -- should be limited to before exiting the
+                                  -- program.
   , ilmDeleteDays      :: Int     -- ^ Max number of days to retain indices
   , ilmMaxSize         :: Int     -- ^ Max size for active index rollover in GB
   , noILM              :: Bool    -- ^ Whether or not to use ILM for index rotation.
@@ -97,14 +109,38 @@ instance ToEnv EnvOptions where
 -- |This is the application environment that RIO requires as its ReaderT value.
 -- This value will be readable from our application context wherever we run it.
 data App = App
-  { appBH             :: BHEnv
-  , appCli            :: CliOptions
+  { appCli            :: CliOptions
   , appEKG            :: EKG.Store
   , appEnv            :: EnvOptions
+  , appESURI          :: ElasticsearchURI
   , appFastlyServices :: [Text]
   , appLogFunc        :: !LogFunc
   , appQueue          :: TBQueue BulkOperation
   }
+
+-- |This is what defines how we run HTTP requests in our application. In order
+-- to run `req` requests, we have to know how to a) retrieve an HTTP
+-- configuration that defines things like how retries work as well as b) how to
+-- handle HTTP exceptions.
+--
+-- In previous revisions of this application, I retried _everything_ and
+-- avoided exceptions entirely in favor of pure return types. It turns out that
+-- `Req` already retries response codes that make sense to retry, but bails out
+-- with an exception for others. I'm now convinced that this is the preferable
+-- behavior: I want to retry without much fuss if there's a gateway or network
+-- timeout, but would rather hard fail if, for example, we send malformed JSON
+-- for some reason, because those sort of failures probably aren't going to
+-- change by waiting and just ends repeatedly sending garbage out needlessly.
+instance MonadHttp (RIO App) where
+  getHttpConfig = do
+    app <- ask
+    -- Use the defaults, except to override exception throwing logic and what
+    -- our default retry policy looks like.
+    return $ defaultHttpConfig
+      { httpConfigCheckResponse = reqCheckResponse
+      , httpConfigRetryPolicy = backoffThenGiveUp (app & appCli & httpRetryLimit)
+      }
+  handleHttpException = throw
 
 -- |Some boilerplate to support the previous record.
 instance HasLogFunc App where
@@ -283,6 +319,17 @@ data ShardStatus =
 
 instance FromJSON ShardStatus
 instance ToJSON ShardStatus
+
+-- |These types mimic those of the community Elasticsearch client library
+-- `Bloodhound`. Mocking them here means that we can write some functions later
+-- on that are agnostic as to whether we end up using our own indexing logic or
+-- `Bloodhound`'s.
+newtype MappingName = MappingName Text
+  deriving (Eq, Show, ToJSON, FromJSON)
+newtype IndexName = IndexName Text
+  deriving (Eq, Show, ToJSON, FromJSON)
+data BulkOperation = BulkIndexAuto IndexName MappingName Value
+  deriving (Eq, Show)
 
 data BulkError =
   BulkError

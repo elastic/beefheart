@@ -11,12 +11,9 @@ import RIO hiding (error)
 import qualified RIO.HashMap as HM
 
 import Control.Concurrent.STM.TBQueue (flushTBQueue, lengthTBQueue)
-import Control.Monad.Catch (MonadMask)
 import Control.Monad.Loops (iterateM_)
 import Data.Aeson (FromJSON)
 import Data.Time.Clock.POSIX
-import Database.V5.Bloodhound (BulkOperation, EsError, IndexName)
-import qualified Network.HTTP.Client as HTTP
 import Network.HTTP.Req hiding (header)
 
 import qualified System.Metrics as EKG
@@ -44,39 +41,38 @@ queueWatcher app gauge = do
 -- |Self-contained IO action to regularly fetch and queue up metrics for storage
 -- in Elasticsearch.
 metricsRunner
-  :: (MonadReader env m, MonadIO m, HasLogFunc env)
+  :: (MonadReader env m, MonadHttp m, MonadIO m, HasLogFunc env)
   => EKG.Store -- ^ Our app's metrics value
   -> Text -- ^ Fastly API key
   -> Int -- ^ Period between API calls
-  -> Int -- ^ API error backoff factor
   -> TBQueue BulkOperation -- ^ Where to send the metrics we collect
   -> (POSIXTime -> IndexName) -- ^ How to name indices
   -> Text -- ^ The Fastly service ID
   -> m ()
-metricsRunner ekg apiKey period backoff q indexNamer service = do
+metricsRunner ekg apiKey period q indexNamer service = do
   counter <- liftIO $ EKG.createCounter (metricN $ "requests-" <> service) ekg
 
   -- Fetch the service ID's details (to get the human-readable name)
-  serviceDetails <- withRetries ifLeft $ fastlyReq FastlyRequest
+  serviceDetails <- fastlyReq FastlyRequest
     { apiKey       = apiKey
     , service      = ServiceAPI service
     }
+  let serviceName = name $ responseBody serviceDetails
 
-  case serviceDetails of
-    Left err ->
-      logError . display $ "Skipping service " <> service <> ": " <> tshow err
-    Right serviceDetailsResponse -> do
-      -- Before entering the metrics fetching loop, record the service's details in EKG.
-      liftIO $ EKG.createLabel (metricN service) ekg >>= flip Label.set serviceName
+  -- Before entering the metrics fetching loop, record the service's details in EKG.
+  liftIO $ EKG.createLabel (metricN service) ekg >>= flip Label.set serviceName
 
-      -- iterateM_ executes a monadic action (here, IO) and runs forever,
-      -- feeding the return value into the next iteration, which fits well with
-      -- our use case: keep hitting Fastly and feed the previous timestamp into
-      -- the next request.
-      iterateM_ (queueMetricsFor period backoff q toDocs getMetrics) 0
-      where getMetrics = fetchMetrics counter apiKey service
-            toDocs = toBulkOperations indexNamer serviceName
-            serviceName = name $ responseBody serviceDetailsResponse
+  let
+    -- A function that accepts a timestamp and spits back `Analytics` values.
+    getMetrics = fetchMetrics counter apiKey service
+    -- Helper to take raw `Analytics` and transform them into Elasticsearch
+    -- bulk items.
+    toDocs = toBulkOperations indexNamer serviceName
+  -- iterateM_ executes a monadic action (here, IO) and runs forever,
+  -- feeding the return value into the next iteration, which fits well with
+  -- our use case: keep hitting Fastly and feed the previous timestamp into
+  -- the next request.
+  iterateM_ (queueMetricsFor period q toDocs getMetrics) 0
 
 -- |Higher-order function suitable to be fed into iterate that will be the main
 -- metrics retrieval loop. Get a timestamp, fetch some metrics for that
@@ -84,35 +80,21 @@ metricsRunner ekg apiKey period backoff q indexNamer service = do
 queueMetricsFor
   :: (MonadIO m, MonadReader env m, HasLogFunc env)
   => Int -- ^ Period between API calls
-  -> Int -- ^ API backoff factor
   -> TBQueue BulkOperation -- ^ Our application's metrics queue.
   -> (Analytics -> [BulkOperation]) -- ^ A function to transform our metrics into ES bulk operations
-  -> (POSIXTime -> m (Either HttpException (JsonResponse Analytics))) -- ^ Function to get metrics for a timestamp
+  -> (POSIXTime -> m (JsonResponse Analytics)) -- ^ Function to get metrics for a timestamp
   -> POSIXTime -- ^ The actual metrics timestamp we want
   -> m POSIXTime -- ^ Return the new POSIXTime for the subsequent request
-queueMetricsFor period backoff q f getter ts = do
-  response <- getter ts
-  case response of
-    Right metrics -> do
-      atomically $ mapM_ (writeTBQueue q) (f (responseBody metrics))
-      sleepSeconds period
-      return $ timestamp $ responseBody metrics
-    Left httpException -> do
-      logError . display $
-        ( "Error from Fastly: " <> tshow errMsg <> ". "
-        <> "Easing off the API for " <> tshow backoff <> " seconds."
-        )
-      sleepSeconds backoff
-      return ts
-      where errMsg = case httpException of
-                       (VanillaHttpException (HTTP.HttpExceptionRequest _ c)) -> show c
-                       (VanillaHttpException (HTTP.InvalidUrlException _ c)) -> c
-                       (JsonHttpException c) -> c
+queueMetricsFor period q f getter ts = do
+  metrics <- getter ts
+  atomically $ mapM_ (writeTBQueue q) (f (responseBody metrics))
+  sleepSeconds period
+  return $ timestamp $ responseBody metrics
 
 -- |A self-contained indexing runner intended to be run within a thread. Wakes
 -- up periodically to bulk index documents that it finds in our queue.
 indexingRunner
-  :: (MonadReader env m, MonadMask m, MonadIO m, HasLogFunc env)
+  :: (MonadReader env m, MonadHttp m, HasLogFunc env)
   => App
   -> m b
 indexingRunner app = do
@@ -120,18 +102,12 @@ indexingRunner app = do
   -- tl;dr, we should always get _something_ from this action. Note that
   -- Elasticsearch will error out if we try and index nothing ([])
   docs <- atomically $ dequeueOperations $ appQueue app
-  esResponse <- indexAnalytics (appBH app) docs
-  case esResponse of
-    Left esError -> logError $ display esError
-    Right bulkResponse -> logDebug $ "Indexed " <> indexed <> " docs"
-      where indexed = display $ length $ filter isNothing $ map error $ concatMap HM.elems $ items bulkResponse
+  bulkResponse <- either (indexAnalytics docs) (indexAnalytics docs) (appESURI app)
+  let indexed = display $ length $ filter isNothing $ map error $ concatMap HM.elems $ items $ responseBody bulkResponse
+  logDebug $ "Indexed " <> indexed <> " docs"
   -- Sleep for a time before performing another bulk operation.
   sleepSeconds (esFlushDelay $ appCli app)
   indexingRunner app
-
--- |Dumb instance just so we can log ES errors
-instance Display EsError
-  where textDisplay a = tshow a
 
 -- |Flush Elasticsearch bulk operations that need to be indexed from our queue.
 dequeueOperations
@@ -157,18 +133,17 @@ dequeueOperations q = do
 --   -> POSIXTime       -- ^ Timestamp for analytics
 --   -> IO (Either HttpException (JsonResponse Analytics))
 fetchMetrics
-  :: (MonadIO m, FromJSON a)
+  :: (MonadHttp m, MonadIO m, FromJSON a)
   => Counter.Counter
   -> Text
   -> Text
   -> POSIXTime
-  -> m (Either HttpException (JsonResponse a))
+  -> m (JsonResponse a)
 fetchMetrics counter key service ts = do
   -- Immediately prior to the Fastly request, hit the counter.
   liftIO $ Counter.inc counter
   -- Perform actual API call to Fastly asking for metrics for a service.
-  withRetries ifLeft $
-    fastlyReq FastlyRequest
-              { apiKey = key
-              , service = AnalyticsAPI service ts
-              }
+  fastlyReq FastlyRequest
+            { apiKey = key
+            , service = AnalyticsAPI service ts
+            }

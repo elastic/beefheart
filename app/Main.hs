@@ -5,16 +5,17 @@ import Beefheart
 -- Note the use of `RIO` here in lieu of the typical `Prelude`. This
 -- is done primarily in order to get a baseline library with more
 -- community-standardized tools like `text` and `async`.
-import RIO
+--
+-- We hide `tryAny`, since we're using a different exceptions package.
+import RIO hiding (tryAny)
 import RIO.Orphans ()
-import RIO.Text hiding (length, null)
+import RIO.Text (pack)
 
+-- A third-party exceptions package that offers a few more guarantees
+import Control.Exception.Safe
 import GHC.Natural (intToNatural)
--- This is our Elasticsearch library.
-import Database.V5.Bloodhound hiding (esUsername, esPassword, key, name)
 -- Think of the equivalent to python's `requests`
 import Network.HTTP.Req hiding (header)
-import qualified Network.HTTP.Client as HTTP
 -- CLI option parsing.
 import Options.Applicative
 -- Environment variable parsing.
@@ -67,18 +68,19 @@ cliOptions = CliOptions
     )
   -- Parse the Fastly backoff seconds.
   <*> option auto
-    ( long "fastly-backoff"
-      <> help "How many seconds to wait when backing off from Fastly API errors"
-      <> showDefault
-      <> value 60
-      <> metavar "SECONDS"
-    )
-  -- Parse the Fastly backoff seconds.
-  <*> option auto
     ( long "fastly-period"
       <> help "Polling frequency against the Fastly real-time metrics API"
       <> showDefault
       <> value 1
+      <> metavar "SECONDS"
+    )
+  -- Customizable HTTP backoff factor
+  <*> option auto
+    ( long "http-retry-limit"
+      <> help ( "Hard limit to honor when retrying HTTP requests to Fastly or Elasticsearch, in minutes. "
+             <> "Once this time limit is reached, the program will exit.")
+      <> showDefault
+      <> value 60
       <> metavar "SECONDS"
     )
   -- ILM date cutoff to delete indices
@@ -156,7 +158,11 @@ main = do
   -- Similar case for environment variables.
   env' <- decodeEnv :: IO (Either String EnvOptions)
 
-  -- A top-level case pattern match is easier to grok for particular failures
+  -- A top-level case pattern match is easier to grok for particular failures.
+  -- Note that CLI parsing will bailout when things like required arguments
+  -- aren't present, but parsing expected environment variables won't, which is
+  -- why our case statement is only checking for the parsed environment and
+  -- whether the Elasticsearch URL is well-formed.
   case (env', parseUrl $ encodeUtf8 $ elasticsearchUrl options) of
     -- finding `Nothing` means the API key isn't present, so fail fast here.
     (Left envError, _) -> do
@@ -175,7 +181,7 @@ main = do
       -- the API.
       services <- if (null $ servicesCli options)
                   then do
-                    autodiscoverServices (fastlyKey vars)
+                    runReq defaultHttpConfig $ autodiscoverServices (fastlyKey vars)
                   else
                     return $ servicesCli options
 
@@ -188,20 +194,18 @@ main = do
       EKG.createLabel (metricN "elasticsearch-url") metricsStore
         >>= flip Label.set (tshow $ elasticsearchUrl options)
 
-      -- We create a dedicated Bloodhound environment value here which lets us
-      -- potentially authenticate to Elasticsearch if those credentials are
-      -- present.
-      httpManager <- HTTP.newManager HTTP.defaultManagerSettings
-      let bhEnv' = mkBHEnv (Server $ elasticsearchUrl options) httpManager
-          (bhEnv, reqAuth) = case (esUsername vars, esPassword vars) of
-                    (Just u, Just p) ->
-                      ( bhEnv' { bhRequestHook = basicAuthHook (EsUsername u) (EsPassword p) }
-                      , Just ((encodeUtf8 u), (encodeUtf8 p))
-                      )
-                    _ ->
-                      ( bhEnv'
-                      , Nothing
-                      )
+      -- We check whether HTTP basic auth credentials have been passed, and
+      -- amend our HTTP value with the necessary options if so. From here on
+      -- out, we use `esURI`, which should hold all the connection information
+      -- for ES that we need like port, hostname, auth, etc.
+      let reqAuth :: Option scheme
+          reqAuth = case (esUsername vars, esPassword vars) of
+            (Just u, Just p) -> basicAuthUnsafe (encodeUtf8 u) (encodeUtf8 p)
+            _ -> mempty
+          esURI = applyAuth parsedUrl
+                  where applyAuth :: ElasticsearchURI -> ElasticsearchURI
+                        applyAuth (Left (u, o)) = Left (u, o <> reqAuth)
+                        applyAuth (Right (u, o)) = Right (u, o <> reqAuth)
 
       -- To retrieve and index our metrics safely between threads, use an STM
       -- Queue to communicate between consumers and producers. Important to note
@@ -232,10 +236,10 @@ main = do
         -- This is our core datatype; our `App` that houses our logging hook,
         -- configuration information, etc.
         let app = App
-                  { appBH = bhEnv
-                  , appCli = options
+                  { appCli = options
                   , appEKG = metricsStore
                   , appEnv = vars
+                  , appESURI = esURI
                   , appFastlyServices = services
                   , appLogFunc = lf
                   , appQueue = metricsQueue
@@ -250,23 +254,26 @@ main = do
           -- start executing some IO actions:
           --
           -- Create any necessary index templates.
-          -- TODO should the http request manager be shared?
-          let bootstrap :: (Url scheme, Option scheme) -> IO (Either HttpException IgnoreResponse)
-              bootstrap url =
+          let bootstrap :: (Url scheme, Option scheme) -> RIO App IgnoreResponse
+              bootstrap (url, opts) =
                 bootstrapElasticsearch (noILM options)
                                        (ilmMaxSize options)
                                        (ilmDeleteDays options)
                                        (esIndex options)
                                        url
-                                       reqAuth
-          resp <- liftIO $ withRetries ifLeft $ do
-            either bootstrap bootstrap parsedUrl
+                                       opts
 
+          -- Run the bootstrapping logic. Our HTTP request library will retry
+          -- responses that make sense to retry, such as network timeouts, but
+          -- will fail and bailout for other response codes, like if our
+          -- request is malformed.
+          resp <- tryAny (either bootstrap bootstrap esURI)
           case resp of
-               Left e ->
-                 logError . display $ tshow e
-               Right _r ->
-                 logDebug . display $ "Successfully created ES templates for " <> (esIndex options)
+            Left e -> do
+              logError . display $ tshow e
+              exitFailure
+            Right _r -> do
+              logDebug . display $ "Successfully created ES templates for " <> (esIndex options)
 
           -- Because we support either timestamp-appended indices or automagic
           -- ILM index rollover, naming the index varies depending on whether
@@ -283,7 +290,6 @@ main = do
               metricsStore
               (fastlyKey vars)
               (fastlyPeriod options)
-              (fastlyBackoff options)
               metricsQueue
               indexNamer
               service

@@ -1,11 +1,10 @@
-import RIO
+import RIO hiding (assert)
 import RIO.Orphans ()
 
 import Control.Retry
 import Data.Aeson
-import Database.V5.Bloodhound
-import Network.HTTP.Client
 import Network.HTTP.Req
+import qualified Network.HTTP.Req as Req
 import Test.Tasty
 import Test.Tasty.HUnit
 import Test.Tasty.QuickCheck
@@ -15,17 +14,14 @@ import Util
 
 main :: IO ()
 main = do
-  -- Before launching, create an HTTP request manager that we trickle down into
-  -- tests.
-  manager <- newManager defaultManagerSettings
-  defaultMain $ tests manager
+  defaultMain tests
 
 -- |High-level test entrypoint for unit tests and integration tests.
-tests :: Manager -> TestTree
-tests m =
+tests :: TestTree
+tests =
   testGroup "Tests"
   [ unitTests
-  , integrationTests m
+  , integrationTests
   ]
 
 -- |Simple unit tests
@@ -41,32 +37,31 @@ unitTests =
 
 -- |Tests that do a bit more, i.e. talk to Elasticsearch to verify indexing
 -- works.
-integrationTests :: Manager -> TestTree
-integrationTests m =
+integrationTests :: TestTree
+integrationTests =
   withResource (elasticsearchContainer "7.4.0") containerCleanup $ \_cid ->
     testGroup "Integration Tests"
     -- First, confirm the API is responsive.
     [ testCase "Elasticsearch is UP" $ do
-      resp <- recoverAll backoffThenGiveUp (\_exc -> runBH bh getStatus)
-      assertBool "Elasticsearch container is responsive" (isJust resp)
+        resp <- recoverAll (waitSecUntilMin 1) $ \_unusedRetryInfo ->
+          rr $ req GET (http "localhost") NoReqBody ignoreResponse (Req.port 9200)
+        responseStatusCode resp @?= 200
     , after AllSucceed "Elasticsearch is UP" $
     -- Then, try installing the index template.
       testCase "Install template" $ do
-        resp <- bootstrapElasticsearch False 10 10 "fastly" (http "localhost", Req.port 9200) Nothing
-        case resp of
-           Left exc -> assertFailure $ "Bootstrap failed: " <> show exc
-           Right httpResp -> responseStatusCode httpResp @?= 200
+        response <- rr $ bootstrapElasticsearch False 10 10 "fastly" (http "localhost") (Req.port 9200)
+        responseStatusCode response @?= 200
     , after AllSucceed "Install template" $
     -- Finally, try indexing a set of random `Analytics`
       testCase "Documents can be indexed" $ do
         let toBulk = toBulkOperations "fastly" "%Y" "myservice"
         analytics <- (generate $ listOf1 arbitrary) :: IO ([Analytics])
         let documents = analytics >>= toBulk
-        bulkResp <- runSimpleApp $ indexAnalytics bh documents
-        case bulkResp of
-          Left _ -> assertFailure $ "Bad response from Elasticsearch: " <> show bulkResp
-          Right esResp -> do
-            assertBool "Indexing errors" (not $ bulkErrors esResp)
-            assertEqual "Missing documents" (length documents) (length $ items esResp)
+        bulkResp <- rr $ indexAnalytics documents (http "localhost", Req.port 9200)
+        let esResp = Req.responseBody bulkResp
+        assertBool "Indexing errors" (not $ bulkErrors esResp)
+        assertEqual "Missing documents" (length documents) (length $ items esResp)
     ]
-  where bh = mkBHEnv (Server "http://localhost:9200") m
+  where rr = runReq defaultHttpConfig { httpConfigCheckResponse = reqCheckResponse
+                                      , httpConfigRetryPolicy = waitSecUntilMin 1
+                                      }

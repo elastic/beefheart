@@ -21,14 +21,13 @@ description:         Please see the README on GitHub at <https://github.com/tyle
 dependencies:
 - aeson
 - base >= 4.7 && < 5
-- bloodhound
 - bytestring
 - data-default
 - ekg
 - ekg-core
 - envy
-- exceptions
 - http-client
+- http-types
 - lens
 - lens-aeson
 - monad-loops
@@ -38,6 +37,7 @@ dependencies:
 - retry
 - rio
 - rio-orphans
+- safe-exceptions
 - scientific
 - stm
 - text

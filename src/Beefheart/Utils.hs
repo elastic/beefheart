@@ -2,21 +2,18 @@ module Beefheart.Utils
   ( abort
   , applicationName
   , backoffThenGiveUp
-  , ifLeft
   , metricN
+  , reqCheckResponse
   , sleepSeconds
-  , withRetries
+  , waitSecUntilMin
   )
 where
 
 import RIO
 
 import Control.Retry
-import Network.HTTP.Req
-
--- |Just so we define it in one place
-applicationName :: Text
-applicationName = "beefheart"
+import Network.HTTP.Client
+import Network.HTTP.Types
 
 -- |Log an error and exit the program.
 abort
@@ -28,27 +25,30 @@ abort message = do
     logError . display $ message
   exitFailure
 
--- |Given a monadic action, perform it with retries with a default policy.
-withRetries
-  :: MonadIO m
-  => (RetryStatus -> b -> m Bool)
-  -> m b
-  -> m b
-withRetries check m =
-  retrying backoffThenGiveUp check $ const m
+-- |Just so we define it in one place
+applicationName :: Text
+applicationName = "beefheart"
 
 -- |Initially wait one second, backoff exponentially, then concede to the
--- impossibility of the request if retries reach 5 minutes.
-backoffThenGiveUp :: Monad m => RetryPolicyM m
-backoffThenGiveUp = limitRetriesByDelay (60 * 5 * 1000 * 1000)
-                    $ exponentialBackoff (1 * 1000 * 1000)
+-- impossibility of the request if retries reach `seconds` minutes.
+backoffThenGiveUp :: Monad m => Int -> RetryPolicyM m
+backoffThenGiveUp seconds =
+  exponentialBackoff (1 * 1000 * 1000)
+  & limitRetriesByDelay (seconds * 1000 * 1000)
 
-ifLeft
-  :: (MonadIO m, HttpResponse a)
-  => RetryStatus
-  -> Either HttpException a
-  -> m Bool
-ifLeft = const (return . isLeft)
+-- |`Req` will use this function to determine whether or not to immediately
+-- throw an exception. We define our own custom function here since we rely on
+-- 404's as an indicator for the presence of resources in our application.
+reqCheckResponse :: p -> Response a -> ByteString -> Maybe HttpExceptionContent
+reqCheckResponse _ response preview =
+  let scode = statusCode $ responseStatus response
+  in if (200 <= scode && scode < 300) || scode == 404
+     then Nothing
+     else Just (StatusCodeException (void response) preview)
+
+-- |Helper to create EKG metric names
+metricN :: Text -> Text
+metricN n = applicationName <> "." <> n
 
 -- |Sleep for a given number of seconds in a given thread.
 sleepSeconds :: (MonadIO m)
@@ -56,6 +56,8 @@ sleepSeconds :: (MonadIO m)
              -> m ()
 sleepSeconds = threadDelay . (*) (1000 * 1000)
 
--- |Helper to create EKG metric names
-metricN :: Text -> Text
-metricN n = applicationName <> "." <> n
+-- |Pause for one second between retries giving up after `minutes` minutes.
+waitSecUntilMin :: Monad m => Int -> RetryPolicyM m
+waitSecUntilMin minutes =
+  constantDelay (1 * 1000 * 1000)
+  & limitRetriesByCumulativeDelay (60 * minutes * 1000 * 1000)

@@ -6,7 +6,7 @@ where
 
 import RIO
 
-import Control.Monad.Catch
+import Control.Exception.Safe
 import Data.Char
 import qualified Data.HashMap.Strict as HMS
 import Data.Scientific

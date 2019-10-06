@@ -8,25 +8,18 @@ module Beefheart.Elasticsearch
     ) where
 
 import RIO hiding (Handler)
-import RIO.Text hiding (filter, map)
+import qualified RIO.ByteString.Lazy as BSL
+import RIO.Text (pack)
 import RIO.Time
-import RIO.Vector hiding (filter, map)
 
-import           Control.Monad.Except (runExceptT)
-import           Control.Monad.Catch (Handler(..), MonadMask)
-import           Control.Retry
 import           Data.Aeson
 -- Aeson values are internally represented as `HashMap`s, which we import here
 -- in order to munge them a little bit later.
-import           Data.HashMap.Lazy      hiding (filter, fromList, map)
-import qualified Data.HashMap.Lazy      as      HML
+import qualified Data.HashMap.Lazy as HML
 import           Data.Time.Clock.POSIX
-import           Database.V5.Bloodhound hiding (Bucket)
 import           Network.HTTP.Req
-import qualified Network.HTTP.Client as HTTP
 
 import Beefheart.Types
-import Beefheart.Utils
 
 -- |Since we'll try and be forward-compatible, work with just one ES type of
 -- |`doc`
@@ -42,19 +35,13 @@ checkOrLoad :: (ToJSON a, MonadHttp m)
             -> a                -- ^ Potential `ToJSON` value to load
             -> m IgnoreResponse -- ^ Body-less response (useful for response code?)
 checkOrLoad checkUrl loadUrl opts payload = do
-  response <- req'' $ req HEAD checkUrl NoReqBody ignoreResponse opts
+  response <- req GET checkUrl NoReqBody ignoreResponse opts
   if responseStatusCode response == 200
   then do
     return response
   else do
     creation <- req PUT loadUrl (ReqBodyJson payload) ignoreResponse opts
     return creation
-  -- We wrap the `Req` library's `runReq` here in order to override exception
-  -- catching behavior. Normally, the library actually throws an exception when
-  -- it encounters a non-2xx respose code (weird, right?). Instead we swallow
-  -- it so that we can explicitly check the response code with normal control
-  -- flow.
-  where req'' = runReq defaultHttpConfig { httpConfigCheckResponse = (\_ _ _ -> Nothing) }
 
 -- |If the `URL`s to check and PUT JSON are the same, define a little helper
 -- function.
@@ -70,25 +57,21 @@ idempotentLoad url opts body = checkOrLoad url url opts body
 -- index lifecycles. In the future, we shouldn't ignore the json response, but
 -- this is okay for now.
 bootstrapElasticsearch
-  :: MonadIO m
+  :: MonadHttp m
   => Bool -- ^ Whether to enable ILM lifecycle rules
   -> Int -- ^ ILM size before rotation
   -> Int -- ^ Max number of days before deletion
   -> Text -- ^ Index name
-  -> (Url scheme, Option scheme) -- ^ ES HTTP endpoint
-  -> Maybe (ByteString, ByteString) -- ^ HTTP options such as port, user auth, etc.
-  -> m (Either HttpException IgnoreResponse)
-bootstrapElasticsearch ilmDisabled ilmSize ilmDays idx (esUrl, urlOpts) auth =
-  runExceptT $ do
-    if ilmDisabled then do
-      setupTemplate idx esUrl reqOpts
-    else do
-      setupTemplate idx esUrl reqOpts
-        >> setupILM ilmSize ilmDays esUrl reqOpts
-        >> setupAlias idx esUrl reqOpts
-  where toBasicAuth (Just (u, p)) = basicAuthUnsafe u p
-        toBasicAuth _ = mempty
-        reqOpts = urlOpts <> toBasicAuth auth
+  -> Url scheme -- ^ ES HTTP endpoint
+  -> Option scheme -- ^ HTTP options such as port, user auth, etc.
+  -> m (IgnoreResponse)
+bootstrapElasticsearch ilmDisabled ilmSize ilmDays idx esUrl reqOpts =
+  if ilmDisabled then do
+    setupTemplate idx esUrl reqOpts
+  else do
+    setupTemplate idx esUrl reqOpts
+      >> setupILM ilmSize ilmDays esUrl reqOpts
+      >> setupAlias idx esUrl reqOpts
 
 -- |Configure the index (and alias).
 setupAlias
@@ -148,7 +131,7 @@ setupTemplate
   -> Option scheme -- ^ HTTP options such as port, user auth, etc.
   -> m (IgnoreResponse) -- ^ Return either exception or response headers
 setupTemplate esIndex esUrl opts =
-  idempotentLoad (esUrl /: "_template" /: "beefheart") opts analyticsTemplate
+  idempotentLoad (esUrl /: "_template" /: "beefheart") (opts <> "include_type_name" =: True) analyticsTemplate
   where analyticsTemplate = toJSON $
           object
           [ "index_patterns" .= [ esIndex <> "*" ]
@@ -161,35 +144,34 @@ setupTemplate esIndex esUrl opts =
           , "mappings" .= toJSON AnalyticsMapping
           ]
 
--- |Given a Bloodhound environment and a list of operations, run bulk indexing
--- and get a response back.
+-- |Accepts a collection of bulk operations, connection tuple, and bulk indexes
+-- all documents into Elasticsearch.
 indexAnalytics
-  :: (MonadIO m, MonadMask m, MonadReader env m, HasLogFunc env)
-  => BHEnv                           -- ^ Bloodhound environment
-  -> [BulkOperation]                 -- ^ List of operations to index
-  -> m (Either EsError BulkResponse) -- ^ Bulk request response
-indexAnalytics es operations = do
-  -- `recovering` is a retry higher-order function that we can use to wrap
-  -- around functions that may throw exceptions. It takes a policy (which we
-  -- have a central definition for elsewhere) that dictates how we backoff, a
-  -- function that gets called for each failure, and finally our monadic action
-  -- to run.
-  response <- recovering backoffThenGiveUp [shouldRetry] esRequest
-  parseEsResponse response
+  :: (Foldable t, MonadHttp m, FromJSON a)
+  => t BulkOperation -- ^ Usually a list of bulk operations
+  -> (Url scheme, Option scheme) -- ^ ES connection information
+  -> m (JsonResponse a) -- ^ Bulk response JSON
+indexAnalytics operations (url, opts) = do
+  response <- req POST (url /: "_bulk") body jsonResponse (opts <> contentType)
+  return response
   where
-    -- `esRequest` ends up being the Thing We Want to Run
-    esRequest = return $ runBH es . bulk . fromList $ operations
-    -- `shouldRetry` gets handed a `RetryStatus` whenever `recovering` consults
-    -- it to determine if it should actually retry the action (and as long as
-    -- the policy allows it). It needs to implement a `Handler`, which accepts
-    -- an exception type and hands back a boolean indicating whether to
-    -- proceed. We're dumb here and just say we should always retry requests -
-    -- our policy will eventually give up, but we'll persist through timeouts
-    -- or disconnections.
-    shouldRetry retryStatus = Handler $ \(_ :: HTTP.HttpException) -> do
-      logError . display $
-        "Failed bulk request to Elasticsearch. Failed " <> (tshow $ rsIterNumber retryStatus) <> " times so far."
-      return True
+    body = (ReqBodyLbs $ asNDJSON operations)
+    contentType = header "Content-Type" "application/x-ndjson"
+
+-- |Transforms (usually) a list of `BulkOperation`s into a newline-delimited
+-- `ByteString` suitable for the Elasticsearch bulk API.
+asNDJSON
+  :: Foldable t
+  => t BulkOperation -- ^ Bulk operations to process
+  -> BSL.ByteString -- ^ Raw `ByteString` to send over HTTP
+asNDJSON operations = foldl' bulkFormat "" operations
+  where
+    bulkFormat jsonLines (BulkIndexAuto (IndexName n) (MappingName _) value) =
+      jsonLines
+      <> (encode $ object [ "index" .= object [ "_index" .= n ] ])
+      <> "\n"
+      <> (encode value)
+      <> "\n"
 
 -- |Helper to take a response from Fastly and form it into a bulk operation for
 -- Elasticsearch. The output from this is expected to be fed into
@@ -209,7 +191,7 @@ toBulkOperations indexNamer serviceName metrics = map toOperation . normalize $ 
     normalize analytics = fData analytics >>= toESDoc
     -- Given a `Datacenter`, extract the list of metrics, and fold the
     -- `HashMap` into a list of `Value`s.
-    toESDoc metrics' = foldlWithKey' (encodeMetrics serviceName $ recorded metrics') []
+    toESDoc metrics' = HML.foldlWithKey' (encodeMetrics serviceName $ recorded metrics') []
                       $ datacenter metrics'
 
     -- Take an Aeson `Value` and put it into BulkOperation form.
