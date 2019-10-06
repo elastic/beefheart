@@ -43,7 +43,7 @@ unitTests =
 -- works.
 integrationTests :: Manager -> TestTree
 integrationTests m =
-  withResource (elasticsearchContainer "6.8.2") containerCleanup $ \_cid ->
+  withResource (elasticsearchContainer "7.4.0") containerCleanup $ \_cid ->
     testGroup "Integration Tests"
     -- First, confirm the API is responsive.
     [ testCase "Elasticsearch is UP" $ do
@@ -52,7 +52,7 @@ integrationTests m =
     , after AllSucceed "Elasticsearch is UP" $
     -- Then, try installing the index template.
       testCase "Install template" $ do
-        resp <- bootstrapElasticsearch False 10 10 "fastly" (http "localhost") 9200
+        resp <- bootstrapElasticsearch False 10 10 "fastly" (http "localhost", Req.port 9200) Nothing
         case resp of
            Left exc -> assertFailure $ "Bootstrap failed: " <> show exc
            Right httpResp -> responseStatusCode httpResp @?= 200
