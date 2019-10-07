@@ -131,7 +131,7 @@ setupTemplate
   -> Option scheme -- ^ HTTP options such as port, user auth, etc.
   -> m (IgnoreResponse) -- ^ Return either exception or response headers
 setupTemplate esIndex esUrl opts =
-  idempotentLoad (esUrl /: "_template" /: "beefheart") (opts <> "include_type_name" =: True) analyticsTemplate
+  idempotentLoad (esUrl /: "_template" /: "beefheart") opts analyticsTemplate
   where analyticsTemplate = toJSON $
           object
           [ "index_patterns" .= [ esIndex <> "*" ]

@@ -367,31 +367,29 @@ data AnalyticsMapping = AnalyticsMapping deriving (Show)
 instance ToJSON AnalyticsMapping where
   toJSON AnalyticsMapping =
     object
-    [ "_doc" .= object
-      [ "properties" .= object
-        [ "timestamp" .= object
-          [ "type" .= ("date" :: Text) ]
-        , "requests" .= object
-          [ "type" .= ("long" :: Text) ]
-        , "resp_header_bytes" .= object
-          [ "type" .= ("long" :: Text) ]
-        , "resp_body_bytes" .= object
-          [ "type" .= ("long" :: Text) ]
-        , "hits" .= object
-          [ "type" .= ("long" :: Text) ]
-        , "miss" .= object
-          [ "type" .= ("long" :: Text) ]
-        , "synth" .= object
-          [ "type" .= ("long" :: Text) ]
-        , "errors" .= object
-          [ "type" .= ("long" :: Text) ]
-        , "hits_time" .= object
-          [ "type" .= ("float" :: Text) ]
-        , "miss_time" .= object
-          [ "type" .= ("float" :: Text) ]
-        -- TODO This mapping isn't right - it should be an object with properties.
-        -- , "miss_histogram" .= object
-        --   [ "type" .= ("long" :: Text) ]
-        ]
+    [ "properties" .= object
+      [ "timestamp" .= object
+        [ "type" .= ("date" :: Text) ]
+      , "requests" .= object
+        [ "type" .= ("long" :: Text) ]
+      , "resp_header_bytes" .= object
+        [ "type" .= ("long" :: Text) ]
+      , "resp_body_bytes" .= object
+        [ "type" .= ("long" :: Text) ]
+      , "hits" .= object
+        [ "type" .= ("long" :: Text) ]
+      , "miss" .= object
+        [ "type" .= ("long" :: Text) ]
+      , "synth" .= object
+        [ "type" .= ("long" :: Text) ]
+      , "errors" .= object
+        [ "type" .= ("long" :: Text) ]
+      , "hits_time" .= object
+        [ "type" .= ("float" :: Text) ]
+      , "miss_time" .= object
+        [ "type" .= ("float" :: Text) ]
+      -- TODO This mapping isn't right - it should be an object with properties.
+      -- , "miss_histogram" .= object
+      --   [ "type" .= ("long" :: Text) ]
       ]
     ]
