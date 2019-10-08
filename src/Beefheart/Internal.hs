@@ -7,9 +7,10 @@ module Beefheart.Internal
   , queueWatcher
   ) where
 
-import RIO hiding (error)
+import RIO hiding (catchAny, error)
 import qualified RIO.HashMap as HM
 
+import Control.Exception.Safe
 import Control.Concurrent.STM.TBQueue (flushTBQueue, lengthTBQueue)
 import Control.Monad.Loops (iterateM_)
 import Data.Aeson (FromJSON)
@@ -41,7 +42,7 @@ queueWatcher app gauge = do
 -- |Self-contained IO action to regularly fetch and queue up metrics for storage
 -- in Elasticsearch.
 metricsRunner
-  :: (MonadReader env m, MonadHttp m, MonadIO m, HasLogFunc env)
+  :: (MonadReader env m, MonadCatch m, MonadHttp m, MonadIO m, HasLogFunc env)
   => EKG.Store -- ^ Our app's metrics value
   -> Text -- ^ Fastly API key
   -> Int -- ^ Period between API calls
@@ -73,6 +74,11 @@ metricsRunner ekg apiKey period q indexNamer service = do
   -- our use case: keep hitting Fastly and feed the previous timestamp into
   -- the next request.
   iterateM_ (queueMetricsFor period q toDocs getMetrics) 0
+    -- In the course of our event loop, we want to notice if something _really_
+    -- fatal happens, and tell us why.
+    `catchAny` \anyException ->
+      logError . display $ "Killing metrics loop for '" <> serviceName
+                        <> "'. Encountered: " <> tshow anyException
 
 -- |Higher-order function suitable to be fed into iterate that will be the main
 -- metrics retrieval loop. Get a timestamp, fetch some metrics for that
