@@ -63,6 +63,7 @@ metricsRunner ekg apiKey period q indexNamer service = do
   -- Before entering the metrics fetching loop, record the service's details in EKG.
   liftIO $ EKG.createLabel (metricN service) ekg >>= flip Label.set serviceName
 
+  logDebug . display $ "Entering metrics loop for service '" <> serviceName <> "'"
   let
     -- A function that accepts a timestamp and spits back `Analytics` values.
     getMetrics = fetchMetrics counter apiKey service
@@ -84,7 +85,7 @@ metricsRunner ekg apiKey period q indexNamer service = do
 -- metrics retrieval loop. Get a timestamp, fetch some metrics for that
 -- timestamp, enqueue them, sleep, repeat.
 queueMetricsFor
-  :: (MonadIO m, MonadReader env m, HasLogFunc env)
+  :: MonadIO m
   => Int -- ^ Period between API calls
   -> TBQueue BulkOperation -- ^ Our application's metrics queue.
   -> (Analytics -> [BulkOperation]) -- ^ A function to transform our metrics into ES bulk operations
@@ -93,7 +94,8 @@ queueMetricsFor
   -> m POSIXTime -- ^ Return the new POSIXTime for the subsequent request
 queueMetricsFor period q f getter ts = do
   metrics <- getter ts
-  atomically $ mapM_ (writeTBQueue q) (f (responseBody metrics))
+  let bulkOperations = f $ responseBody metrics
+  atomically $ mapM_ (writeTBQueue q) bulkOperations
   sleepSeconds period
   return $ timestamp $ responseBody metrics
 
