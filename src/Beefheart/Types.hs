@@ -159,6 +159,7 @@ data Analytics =
   Analytics
   { aggregateDelay :: Maybe Int    -- ^ `Maybe` since it's not present in every response
   , fData          :: [Datacenter] -- ^ List of metrics by `Datacenter`
+  , fError         :: Maybe Text   -- ^ Possible error message
   , timestamp      :: POSIXTime    -- ^ Should be fed back in subsequent requests
   } deriving (Generic, Show)
 
@@ -176,6 +177,7 @@ instance ToJSON Analytics
 fastlyApiEncoding :: Options
 fastlyApiEncoding = defaultOptions { fieldLabelModifier = capitalizeOrScrub }
   where capitalizeOrScrub "fData" = "Data"
+        capitalizeOrScrub "fError" = "Error"
         capitalizeOrScrub s = capitalize s
 
 -- |Capitalizes a string.
