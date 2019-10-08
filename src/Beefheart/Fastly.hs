@@ -25,7 +25,9 @@ fastlyReq
   -> m (JsonResponse a)
 fastlyReq requestPayload =
   req GET (fastlyUrl $ service requestPayload) NoReqBody jsonResponse options
-  where options = header "Fastly-Key" $ encodeUtf8 $ apiKey requestPayload
+  where options = authHeader <> rTimeout
+        authHeader = header "Fastly-Key" $ encodeUtf8 $ apiKey requestPayload
+        rTimeout = (responseTimeout $ 60 * 1000 * 1000)
 
 -- |Helper to form a request URL given a `FastlyRequest`. Broken apart via
 -- pattern matching to make it clear how we treat different requests.
