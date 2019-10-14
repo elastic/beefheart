@@ -7,14 +7,18 @@ module Beefheart.Internal
   , queueWatcher
   ) where
 
-import RIO hiding (catchAny, error)
+import RIO hiding (Handler, catchAny, error, try)
 import qualified RIO.HashMap as HM
+import RIO.Orphans ()
+import RIO.Text (pack)
 
 import Control.Exception.Safe
 import Control.Concurrent.STM.TBQueue (flushTBQueue, lengthTBQueue)
 import Control.Monad.Loops (iterateM_)
+import Control.Retry
 import Data.Aeson (FromJSON)
 import Data.Time.Clock.POSIX
+import qualified Network.HTTP.Client as HTTP
 import Network.HTTP.Req hiding (header)
 
 import qualified System.Metrics as EKG
@@ -42,15 +46,16 @@ queueWatcher app gauge = do
 -- |Self-contained IO action to regularly fetch and queue up metrics for storage
 -- in Elasticsearch.
 metricsRunner
-  :: (MonadReader env m, MonadCatch m, MonadHttp m, MonadIO m, HasLogFunc env)
-  => EKG.Store -- ^ Our app's metrics value
-  -> Text -- ^ Fastly API key
-  -> Int -- ^ Period between API calls
-  -> TBQueue BulkOperation -- ^ Where to send the metrics we collect
-  -> (POSIXTime -> IndexName) -- ^ How to name indices
+  :: (POSIXTime -> IndexName) -- ^ How to name indices
   -> Text -- ^ The Fastly service ID
-  -> m ()
-metricsRunner ekg apiKey period q indexNamer service = do
+  -> RIO App () -- ^ Our application monad
+metricsRunner indexNamer service = do
+  ekg <- asks appEKG
+  envVars <- asks appEnv
+  cli <- asks appCli
+  q <- asks appQueue
+  let apiKey = fastlyKey envVars
+
   counter <- liftIO $ EKG.createCounter (metricN $ "requests-" <> service) ekg
 
   -- Fetch the service ID's details (to get the human-readable name)
@@ -74,7 +79,7 @@ metricsRunner ekg apiKey period q indexNamer service = do
   -- feeding the return value into the next iteration, which fits well with
   -- our use case: keep hitting Fastly and feed the previous timestamp into
   -- the next request.
-  iterateM_ (queueMetricsFor period q toDocs getMetrics) 0
+  iterateM_ (queueMetricsFor (fastlyPeriod cli) q toDocs getMetrics) 0
     -- In the course of our event loop, we want to notice if something _really_
     -- fatal happens, and tell us why.
     `catchAny` \anyException ->
@@ -101,21 +106,56 @@ queueMetricsFor period q f getter ts = do
 
 -- |A self-contained indexing runner intended to be run within a thread. Wakes
 -- up periodically to bulk index documents that it finds in our queue.
-indexingRunner
-  :: (MonadReader env m, MonadHttp m, HasLogFunc env)
-  => App
-  -> m b
-indexingRunner app = do
+-- indexingRunner
+indexingRunner :: RIO App ()
+indexingRunner = do
+  -- Pull some values out of our application environment
+  queue <- asks appQueue
+  cliArgs <- asks appCli
+  esURI <- asks appESURI
+
   -- See the comment on dequeueOperations for additional information, but
   -- tl;dr, we should always get _something_ from this action. Note that
   -- Elasticsearch will error out if we try and index nothing ([])
-  docs <- atomically $ dequeueOperations $ appQueue app
-  bulkResponse <- either (indexAnalytics docs) (indexAnalytics docs) (appESURI app)
+  docs <- atomically $ dequeueOperations queue
+  let
+    -- This is the indexing action to call on the bulk API. We wrap it a little
+    -- so that our retrying library can use it.
+    runIndex = \_unusedRetryStatus ->
+      either (indexAnalytics docs) (indexAnalytics docs) esURI
+  -- Indefinitely retry (on most exceptions) our indexing action.
+  bulkResponse <- recovering backoffAndKeepTrying [handler] runIndex
   let indexed = display $ length $ filter isNothing $ map error $ concatMap HM.elems $ items $ responseBody bulkResponse
   logDebug $ "Indexed " <> indexed <> " docs"
   -- Sleep for a time before performing another bulk operation.
-  sleepSeconds (esFlushDelay $ appCli app)
-  indexingRunner app
+  sleepSeconds (esFlushDelay cliArgs)
+  indexingRunner
+  where
+    -- This function is consulted each time an attempt fails to determine
+    -- whether to try again (`True`) or let the exception propagate (`False`).
+    handler retryStatus = Handler $ \exception -> do
+      let retryNote = "Retry attempt " <> tshow (rsIterNumber retryStatus) <> "."
+      case exception of
+        (VanillaHttpException (HTTP.HttpExceptionRequest _ e)) -> do
+          logError . display $
+            "Encountered ES indexing error: " <> (tshow e)
+            <> ". " <> retryNote
+          return True
+        (VanillaHttpException (HTTP.InvalidUrlException _ _)) -> do
+          logError "Somehow we malformed a URL to Elasticsearch - how did that happen? Bailing out."
+          return False
+        (JsonHttpException e) -> do
+          logError . display $
+            "Bad response from Elasticsearch: " <> pack e
+            <> ". " <> retryNote
+          return True
+    -- Our retry policy for ES is to backoff exponentially and cap our retry
+    -- limit, so we end up always retrying when we can.
+    backoffAndKeepTrying =
+      -- Backoff by one second, increasing exponentially
+      exponentialBackoff (1_000_000)
+      -- But don't wait longer than 10 minutes between attempts
+      & capDelay (1_000_000 * 10)
 
 -- |Flush Elasticsearch bulk operations that need to be indexed from our queue.
 dequeueOperations

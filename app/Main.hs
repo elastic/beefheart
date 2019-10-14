@@ -282,25 +282,14 @@ main = do
                           else
                             (\_ -> IndexName (esIndex options))
 
-          -- Spawn threads for each service which will fetch and queue up documents to be indexed.
-          _metricsThreads <- forM services $ \service ->
-            async $ metricsRunner
-              metricsStore
-              (fastlyKey vars)
-              (fastlyPeriod options)
-              metricsQueue
-              indexNamer
-              service
-
-          -- Spin up another thread to report our queue size metrics to EKG.
+          -- Create a gauge to measure our main application queue
           gauge <- liftIO $ EKG.createGauge (metricN "metricsQueue") (appEKG app)
-          _watcherThread <- async $ queueWatcher app gauge
 
-          -- Finally, run our consumer to read metrics from the bounded queue in our
-          -- main thread. Because we're already bulking index requests to
-          -- Elasticsearch, there's not really a need to aggressively parallelize
-          -- this.
-          indexingRunner app
+          -- Run each of our threads concurrently:
+          (queueWatcher app gauge) -- Our monitoring/instrumentation thread
+            `concurrently_` indexingRunner -- Elasticsearch bulk indexer
+            `concurrently_` forConcurrently services -- And, concurrently for each service:
+              (metricsRunner indexNamer) -- Spin off a thread to poll metrics regularly.
 
   -- This is where we instantiate our option parser.
   where cliOpts = info (cliOptions <**> helper)
