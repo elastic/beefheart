@@ -255,13 +255,11 @@ main = do
           --
           -- Create any necessary index templates.
           let bootstrap :: (Url scheme, Option scheme) -> RIO App IgnoreResponse
-              bootstrap (url, opts) =
+              bootstrap =
                 bootstrapElasticsearch (noILM options)
                                        (ilmMaxSize options)
                                        (ilmDeleteDays options)
                                        (esIndex options)
-                                       url
-                                       opts
 
           -- Run the bootstrapping logic. Our HTTP request library will retry
           -- responses that make sense to retry, such as network timeouts, but

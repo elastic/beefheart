@@ -62,10 +62,9 @@ bootstrapElasticsearch
   -> Int -- ^ ILM size before rotation
   -> Int -- ^ Max number of days before deletion
   -> Text -- ^ Index name
-  -> Url scheme -- ^ ES HTTP endpoint
-  -> Option scheme -- ^ HTTP options such as port, user auth, etc.
+  -> (Url scheme, Option scheme ) -- ^ ES HTTP endpoint and HTTP options such as port, user auth, etc.
   -> m (IgnoreResponse)
-bootstrapElasticsearch ilmDisabled ilmSize ilmDays idx esUrl reqOpts =
+bootstrapElasticsearch ilmDisabled ilmSize ilmDays idx (esUrl, reqOpts) =
   if ilmDisabled then do
     setupTemplate idx esUrl reqOpts
   else do
