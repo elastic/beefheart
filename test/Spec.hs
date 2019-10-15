@@ -49,7 +49,7 @@ integrationTests =
     , after AllSucceed "Elasticsearch is UP" $
     -- Then, try installing the index template.
       testCase "Install template" $ do
-        response <- rr $ bootstrapElasticsearch False 10 10 "fastly" (http "localhost") (Req.port 9200)
+        response <- rr $ bootstrapElasticsearch False 10 10 "fastly" (http "localhost", Req.port 9200)
         responseStatusCode response @?= 200
     , after AllSucceed "Install template" $
     -- Finally, try indexing a set of random `Analytics`

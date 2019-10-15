@@ -10,6 +10,7 @@ import Control.Exception.Safe
 import Data.Char
 import qualified Data.HashMap.Strict as HMS
 import Data.Scientific
+import Data.Text.Arbitrary ()
 import Data.Time.Clock.POSIX (POSIXTime)
 import Docker.Client
 import Generic.Random
