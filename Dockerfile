@@ -36,6 +36,11 @@ FROM ubuntu:18.04 as app
 COPY --from=dependencies /usr/local/libgmp.deb /tmp
 RUN dpkg -i /tmp/libgmp.deb && rm /tmp/libgmp.deb
 
+RUN apt update \
+  && apt install -y ca-certificates \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY --from=build /usr/local/bin/beefheart /usr/local/bin/
 EXPOSE 8000
 CMD ["/usr/local/bin/beefheart"]
