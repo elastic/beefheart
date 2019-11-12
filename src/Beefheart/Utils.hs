@@ -42,7 +42,7 @@ backoffThenGiveUp seconds =
 reqCheckResponse :: p -> Response a -> ByteString -> Maybe HttpExceptionContent
 reqCheckResponse _ response preview =
   let scode = statusCode $ responseStatus response
-  in if (200 <= scode && scode < 300) || scode == 404
+  in if (200 <= scode && scode < 300) || scode == 404 || scode == 503
      then Nothing
      else Just (StatusCodeException (void response) preview)
 
