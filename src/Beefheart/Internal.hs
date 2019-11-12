@@ -7,7 +7,7 @@ module Beefheart.Internal
   , queueWatcher
   ) where
 
-import RIO hiding (Handler, catchAny, error, try)
+import RIO hiding (Handler, catch, error, try)
 import qualified RIO.HashMap as HM
 import RIO.Orphans ()
 import RIO.Text (pack)
@@ -75,16 +75,38 @@ metricsRunner indexNamer service = do
     -- Helper to take raw `Analytics` and transform them into Elasticsearch
     -- bulk items.
     toDocs = toBulkOperations indexNamer serviceName
+    -- Our exception handler for HTTP exceptions. Elsewhere, we define the
+    -- conditions for why we would want to retry something, so if we hit this
+    -- point, it stands to reason that the exception is unrecoverable, so offer
+    -- as much information as possible before ending this process/thread. Note
+    -- that all the possible exceptions to follow will come from HTTP calls to
+    -- Fastly, not Elasticsearch.
+    --
+    -- A bad response that we don't want to retry. Log the reason, then we end
+    -- the loop - other threads live on.
+    handleException (VanillaHttpException (HTTP.HttpExceptionRequest _request exception)) =
+      logError . display $ "Killing metrics loop for '" <> serviceName
+                        <> "'. Encountered: " <> tshow exception
+    -- This means Fastly returned malformed json. Assume something is awry
+    -- upstream, let the process die by re-throwing and thus tearing all other
+    -- threads down along with it.
+    handleException e@(JsonHttpException reason) = do
+      logError . display $ "Fastly handed us back bad json: " <> pack reason
+      throw e
+    -- We've malformed our request URL? Something is _wrong_ in our code, log
+    -- the reason and similarly let the exception propagate up because we don't
+    -- want to spew malformed content.
+    handleException e@(VanillaHttpException (HTTP.InvalidUrlException url reason)) = do
+      logError . display $ "We malformed this URL: " <> pack url <> ". Reason: " <> pack reason
+      throw e
   -- iterateM_ executes a monadic action (here, IO) and runs forever,
   -- feeding the return value into the next iteration, which fits well with
   -- our use case: keep hitting Fastly and feed the previous timestamp into
   -- the next request.
   iterateM_ (queueMetricsFor (fastlyPeriod cli) q toDocs getMetrics) 0
     -- In the course of our event loop, we want to notice if something _really_
-    -- fatal happens, and tell us why.
-    `catchAny` \anyException ->
-      logError . display $ "Killing metrics loop for '" <> serviceName
-                        <> "'. Encountered: " <> tshow anyException
+    -- fatal happens, and tell us why. See `handleException` for how we handle it.
+    `catch` handleException
 
 -- |Higher-order function suitable to be fed into iterate that will be the main
 -- metrics retrieval loop. Get a timestamp, fetch some metrics for that
@@ -133,6 +155,9 @@ indexingRunner = do
   where
     -- This function is consulted each time an attempt fails to determine
     -- whether to try again (`True`) or let the exception propagate (`False`).
+    -- This encapsulating function (`indexingRunner`) just talks to
+    -- Elasticsearch, so we'll only need to handle those cases in our exception
+    -- handler.
     handler retryStatus = Handler $ \exception -> do
       let retryNote = "Retry attempt " <> tshow (rsIterNumber retryStatus) <> "."
       case exception of
