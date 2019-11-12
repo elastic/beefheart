@@ -28,6 +28,9 @@ COPY . /usr/local/src
 WORKDIR /usr/local/src
 RUN stack build --system-ghc
 RUN mv "$(stack path --local-install-root --system-ghc)/bin/beefheart" /usr/local/bin/
+# Move EKG assets into position, otherwise instrumentation dashboard doesn't work
+RUN mkdir -p /usr/local/share/beefheart
+RUN find "$(stack path --snapshot-install-root)" -name assets -exec cp -a {} /usr/local/share/beefheart/assets ';'
 
 # Finally, just copy over the bare executable into a smaller image.
 # ------------------------------------------------------------------------------
@@ -42,5 +45,7 @@ RUN apt update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /usr/local/bin/beefheart /usr/local/bin/
+COPY --from=build /usr/local/share/beefheart /usr/local/share/beefheart
+ENV ekg_datadir /usr/local/share/beefheart
 EXPOSE 8000
 CMD ["/usr/local/bin/beefheart"]
