@@ -165,22 +165,22 @@ main = do
   -- whether the Elasticsearch URL is well-formed.
   case (env', parseUrl $ encodeUtf8 $ elasticsearchUrl options) of
     -- finding `Nothing` means the API key isn't present, so fail fast here.
-    (Left envError, _) -> do
+    (Left envError, _) ->
       abort $ pack $ "Error: missing key environment variables: " <> envError
 
     -- Getting `Nothing` from parseUrl is no good, either
-    (_, Nothing) -> do
+    (_, Nothing) ->
       abort $ "Error: couldn't parse elasticsearch URL "
-           <> elasticsearchUrl options
+         <> elasticsearchUrl options
 
     -- `EnvOptions` only strictly requires a Fastly key, which is guaranteed
     -- present if we make it this far.
-    (Right vars, (Just parsedUrl)) -> do
+    (Right vars, Just parsedUrl) -> do
       -- Two modes of operation are supported: explicit list of Fastly
       -- services, or if they aren't passed, pull in all that we can find over
       -- the API.
-      services <- if (null $ servicesCli options)
-                  then do
+      services <- if null $ servicesCli options
+                  then
                     runReq defaultHttpConfig $ autodiscoverServices (fastlyKey vars)
                   else
                     return $ servicesCli options
@@ -270,23 +270,24 @@ main = do
             Left e -> do
               logError . display $ tshow e
               exitFailure
-            Right _r -> do
-              logDebug . display $ "Successfully created ES templates for " <> (esIndex options)
+            Right _r ->
+              logDebug . display $ "Successfully created ES templates for " <> esIndex options
 
           -- Because we support either timestamp-appended indices or automagic
           -- ILM index rollover, naming the index varies depending on whether
           -- ILM is in-use or not.
-          let indexNamer = if (noILM options)
-                          then
-                            datePatternIndexName (esIndex options) (esDatePattern options)
-                          else
-                            (\_ -> IndexName (esIndex options))
+          let indexNamer =
+                if noILM options
+                then
+                  datePatternIndexName (esIndex options) (esDatePattern options)
+                else
+                  (\_ -> IndexName (esIndex options))
 
           -- Create a gauge to measure our main application queue
           gauge <- liftIO $ EKG.createGauge (metricN "metricsQueue") (appEKG app)
 
           -- Run each of our threads concurrently:
-          (queueWatcher app gauge) -- Our monitoring/instrumentation thread
+          queueWatcher app gauge -- Our monitoring/instrumentation thread
             `concurrently_` indexingRunner -- Elasticsearch bulk indexer
             `concurrently_` forConcurrently services -- And, concurrently for each service:
               (metricsRunner indexNamer) -- Spin off a thread to poll metrics regularly.

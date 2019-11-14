@@ -37,11 +37,10 @@ checkOrLoad :: (ToJSON a, MonadHttp m)
 checkOrLoad checkUrl loadUrl opts payload = do
   response <- req GET checkUrl NoReqBody ignoreResponse opts
   if responseStatusCode response == 200
-  then do
+  then
     return response
-  else do
-    creation <- req PUT loadUrl (ReqBodyJson payload) ignoreResponse opts
-    return creation
+  else
+    req PUT loadUrl (ReqBodyJson payload) ignoreResponse opts
 
 -- |If the `URL`s to check and PUT JSON are the same, define a little helper
 -- function.
@@ -51,7 +50,7 @@ idempotentLoad
   -> Option scheme    -- ^ HTTP options such as port, user auth, etc.
   -> a                -- ^ Potential JSON payload
   -> m IgnoreResponse -- ^ `MonadHttp` `m` returning response `HEAD`
-idempotentLoad url opts body = checkOrLoad url url opts body
+idempotentLoad url = checkOrLoad url url
 
 -- |Simple one-off to set up necessary ES indices and other machinery like
 -- index lifecycles. In the future, we shouldn't ignore the json response, but
@@ -63,14 +62,14 @@ bootstrapElasticsearch
   -> Int -- ^ Max number of days before deletion
   -> Text -- ^ Index name
   -> (Url scheme, Option scheme ) -- ^ ES HTTP endpoint and HTTP options such as port, user auth, etc.
-  -> m (IgnoreResponse)
+  -> m IgnoreResponse
 bootstrapElasticsearch ilmDisabled ilmSize ilmDays idx (esUrl, reqOpts) =
-  if ilmDisabled then do
+  if ilmDisabled then
     setupTemplate idx esUrl reqOpts
-  else do
+  else
     setupTemplate idx esUrl reqOpts
-      >> setupILM ilmSize ilmDays esUrl reqOpts
-      >> setupAlias idx esUrl reqOpts
+    >> setupILM ilmSize ilmDays esUrl reqOpts
+    >> setupAlias idx esUrl reqOpts
 
 -- |Configure the index (and alias).
 setupAlias
@@ -78,10 +77,10 @@ setupAlias
   => Text  -- ^ Our index name
   -> Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host)
   -> Option scheme -- ^ HTTP options such as port, user auth, etc.
-  -> m (IgnoreResponse) -- ^ Return either exception or response headers
+  -> m IgnoreResponse -- ^ Return either exception or response headers
 setupAlias esIndex esUrl opts =
   checkOrLoad (esUrl /: "_alias" /: esIndex) (esUrl /: indexName) opts newIndex
-  where indexName = (esIndex <> "-000001")
+  where indexName = esIndex <> "-000001"
         newIndex = toJSON $
           object
           [ "aliases" .= object
@@ -98,7 +97,7 @@ setupILM
   -> Int -- ^ Max days to retain indices
   -> Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host)
   -> Option scheme -- ^ HTTP options such as port, user auth, etc.
-  -> m (IgnoreResponse) -- ^ Return either exception or response headers
+  -> m IgnoreResponse -- ^ Return either exception or response headers
 setupILM gb days esUrl opts =
   idempotentLoad (esUrl /: "_ilm" /: "policy" /: "beefheart") opts ilmPolicy
   where ilmPolicy = toJSON $
@@ -128,7 +127,7 @@ setupTemplate
   => Text  -- ^ Our index name
   -> Url scheme -- ^ Host portion of Elasticsearch `URL` (scheme, host)
   -> Option scheme -- ^ HTTP options such as port, user auth, etc.
-  -> m (IgnoreResponse) -- ^ Return either exception or response headers
+  -> m IgnoreResponse -- ^ Return either exception or response headers
 setupTemplate esIndex esUrl opts =
   idempotentLoad (esUrl /: "_template" /: "beefheart") opts analyticsTemplate
   where analyticsTemplate = toJSON $
@@ -150,11 +149,10 @@ indexAnalytics
   => t BulkOperation -- ^ Usually a list of bulk operations
   -> (Url scheme, Option scheme) -- ^ ES connection information
   -> m (JsonResponse a) -- ^ Bulk response JSON
-indexAnalytics operations (url, opts) = do
-  response <- req POST (url /: "_bulk") body jsonResponse (opts <> contentType)
-  return response
+indexAnalytics operations (url, opts) =
+  req POST (url /: "_bulk") body jsonResponse (opts <> contentType)
   where
-    body = (ReqBodyLbs $ asNDJSON operations)
+    body = ReqBodyLbs $ asNDJSON operations
     contentType = header "Content-Type" "application/x-ndjson"
 
 -- |Transforms (usually) a list of `BulkOperation`s into a newline-delimited
@@ -163,13 +161,13 @@ asNDJSON
   :: Foldable t
   => t BulkOperation -- ^ Bulk operations to process
   -> BSL.ByteString -- ^ Raw `ByteString` to send over HTTP
-asNDJSON operations = foldl' bulkFormat "" operations
+asNDJSON = foldl' bulkFormat ""
   where
     bulkFormat jsonLines (BulkIndexAuto (IndexName n) (MappingName _) value) =
       jsonLines
-      <> (encode $ object [ "index" .= object [ "_index" .= n ] ])
+      <> encode (object [ "index" .= object [ "_index" .= n ] ])
       <> "\n"
-      <> (encode value)
+      <> encode value
       <> "\n"
 
 -- |Helper to take a response from Fastly and form it into a bulk operation for
@@ -237,7 +235,7 @@ encodeMetrics serviceName ts acc pop metrics = mergedObject : acc
                        , toJSON metrics
                        ]
         -- This value ends up looking like "2019-09-13T18:00:00Z"
-        formattedTimestamp = formatTime defaultTimeLocale (iso8601DateFormat $ Just ("%H:%M:%SZ")) $
+        formattedTimestamp = formatTime defaultTimeLocale (iso8601DateFormat $ Just "%H:%M:%SZ") $
                                posixSecondsToUTCTime ts
 
 -- |Small helper function to take a list of Aeson `Value`s and merge them together.

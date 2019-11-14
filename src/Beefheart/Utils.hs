@@ -21,7 +21,7 @@ abort
   => a -- ^ Message to log
   -> m b
 abort message = do
-  runSimpleApp $ do
+  runSimpleApp $
     logError . display $ message
   exitFailure
 

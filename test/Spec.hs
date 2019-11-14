@@ -13,7 +13,7 @@ import Beefheart
 import Util
 
 main :: IO ()
-main = do
+main =
   defaultMain tests
 
 -- |High-level test entrypoint for unit tests and integration tests.
@@ -54,8 +54,8 @@ integrationTests =
     , after AllSucceed "Install template" $
     -- Finally, try indexing a set of random `Analytics`
       testCase "Documents can be indexed" $ do
-        let toBulk = toBulkOperations "fastly" "%Y" "myservice"
-        analytics <- (generate $ listOf1 arbitrary) :: IO ([Analytics])
+        let toBulk = toBulkOperations (datePatternIndexName "fastly" "%Y") "myservice"
+        analytics <- (generate $ listOf1 arbitrary) :: IO [Analytics]
         let documents = analytics >>= toBulk
         bulkResp <- rr $ indexAnalytics documents (http "localhost", Req.port 9200)
         let esResp = Req.responseBody bulkResp

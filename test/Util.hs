@@ -41,7 +41,7 @@ instance Arbitrary Metrics where
   arbitrary = genericArbitrarySingle
 
 instance (Arbitrary a, Eq a, Hashable a, Arbitrary b) => Arbitrary (HashMap a b) where
-  arbitrary = do
+  arbitrary =
     HMS.fromList <$> listOf1 arbitrary
 
 -- |We define a custom `Arbitrary` instance for `Scientific` values so that
@@ -50,7 +50,7 @@ instance Arbitrary Scientific where
   arbitrary = do
     c <- choose
       ( 0
-      , ((2 ^ (32 :: Integer)))
+      , 2 ^ (32 :: Integer)
       )
     return $ scientific c 1
 

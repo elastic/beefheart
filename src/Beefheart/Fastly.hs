@@ -27,7 +27,7 @@ fastlyReq requestPayload =
   req GET (fastlyUrl $ service requestPayload) NoReqBody jsonResponse options
   where options = authHeader <> rTimeout
         authHeader = header "Fastly-Key" $ encodeUtf8 $ apiKey requestPayload
-        rTimeout = (responseTimeout $ 60 * 1000 * 1000)
+        rTimeout = responseTimeout $ 60 * 1000 * 1000
 
 -- |Helper to form a request URL given a `FastlyRequest`. Broken apart via
 -- pattern matching to make it clear how we treat different requests.
@@ -64,10 +64,10 @@ autodiscoverServices key' = do
   -- a more succinct way. This sequence of functions says "grab a list of
   -- values from the 'data' key, flatten out the structure into plain
   -- key/value pairs, and return the 'id' key of each as a `String`".
-  let serviceList = ((responseBody serviceListResponse) :: Value) ^.. key "data" . values . key "id" . _String
-  runSimpleApp $ do
+  let serviceList = (responseBody serviceListResponse :: Value) ^.. key "data" . values . key "id" . _String
+  runSimpleApp $
     case serviceList of
-      [] -> abort $ ("Didn't find any Fastly services to monitor." :: Text)
+      [] -> abort ("Didn't find any Fastly services to monitor." :: Text)
       _ -> logInfo . display $
-        "Found " <> (tshow $ length serviceList) <> " services."
+        "Found " <> tshow (length serviceList) <> " services."
   return serviceList

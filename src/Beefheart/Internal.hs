@@ -143,7 +143,7 @@ indexingRunner = do
   let
     -- This is the indexing action to call on the bulk API. We wrap it a little
     -- so that our retrying library can use it.
-    runIndex = \_unusedRetryStatus ->
+    runIndex _unusedRetryStatus =
       either (indexAnalytics docs) (indexAnalytics docs) esURI
   -- Indefinitely retry (on most exceptions) our indexing action.
   bulkResponse <- recovering backoffAndKeepTrying [handler] runIndex
@@ -163,7 +163,7 @@ indexingRunner = do
       case exception of
         (VanillaHttpException (HTTP.HttpExceptionRequest _ e)) -> do
           logError . display $
-            "Encountered ES indexing error: " <> (tshow e)
+            "Encountered ES indexing error: " <> tshow e
             <> ". " <> retryNote
           return True
         (VanillaHttpException (HTTP.InvalidUrlException _ _)) -> do
@@ -178,9 +178,9 @@ indexingRunner = do
     -- limit, so we end up always retrying when we can.
     backoffAndKeepTrying =
       -- Backoff by one second, increasing exponentially
-      exponentialBackoff (1_000_000)
+      exponentialBackoff 1000000
       -- But don't wait longer than 10 minutes between attempts
-      & capDelay (1_000_000 * 10)
+      & capDelay (1000000 * 10)
 
 -- |Flush Elasticsearch bulk operations that need to be indexed from our queue.
 dequeueOperations
