@@ -15,14 +15,17 @@ module Beefheart.Types
   , FastlyRequest(..)
   , FastlyService(..)
   , IndexName(..)
+  , LogFormat(..)
   , MappingName(..)
   , Metrics
   , PointOfPresence
   , ServiceDetails(..)
+  , readLogFormat
   ) where
 
 import RIO
 import RIO.Char
+import RIO.List (intercalate)
 import RIO.Time
 import RIO.Text (pack)
 
@@ -36,6 +39,7 @@ import Data.Scientific
 import Data.Time.Clock.POSIX (POSIXTime)
 import Katip
 import Network.HTTP.Req
+import Options.Applicative
 import System.Envy hiding (Option, Parser, (.=))
 
 import qualified System.Envy as E
@@ -55,28 +59,47 @@ type ElasticsearchURI = Either (Url 'Http, Option 'Http) (Url 'Https, Option 'Ht
 -- |Command-line arguments are defined at the top-level as a well-defined type.
 data CliOptions =
   CliOptions
-  { elasticsearchUrl   :: Text    -- ^ Where we'll index logs to.
-  , esFlushDelay       :: Int     -- ^ Period in seconds to sleep between bulk
-                                  -- indexing flushes to Elasticsearch
-  , esIndex            :: Text    -- ^ Index prefix for Elasticsearch documents.
-  , esDatePattern      :: Text    -- ^ Date pattern suffix for Elasticsearch
-                                  -- indices (when not using ILM)
-  , fastlyPeriod       :: Int     -- ^ How often to request metrics from the Fastly API.
-  , httpRetryLimit     :: Int     -- ^ Maximum time (in seconds) HTTP requests
-                                  -- should be limited to before exiting the
-                                  -- program.
-  , ilmDeleteDays      :: Int     -- ^ Max number of days to retain indices
-  , ilmMaxSize         :: Int     -- ^ Max size for active index rollover in GB
-  , noILM              :: Bool    -- ^ Whether or not to use ILM for index rotation.
-  , logVerbose         :: Bool    -- ^ Whether to log verbosely
-  , metricsPort        :: Int     -- ^ Optional port to expose metrics over.
-  , metricsWakeup      :: Int     -- ^ Period in seconds that the queue metrics
-                                  -- thread will wait for in between
-                                  -- instrumentation measurements
-  , queueScalingFactor :: Natural -- ^ Factor applied to service count for metrics queue
-  , serviceScalingCap  :: Int     -- ^ A maximum value for how to scale the in-memory metrics document queue.
-  , servicesCli        :: [Text]  -- ^ Which services to collect analytics for.
+  { elasticsearchUrl   :: Text      -- ^ Where we'll index logs to.
+  , esFlushDelay       :: Int       -- ^ Period in seconds to sleep between bulk
+                                    -- indexing flushes to Elasticsearch
+  , esIndex            :: Text      -- ^ Index prefix for Elasticsearch documents.
+  , esDatePattern      :: Text      -- ^ Date pattern suffix for Elasticsearch
+                                    -- indices (when not using ILM)
+  , fastlyPeriod       :: Int       -- ^ How often to request metrics from the Fastly API.
+  , httpRetryLimit     :: Int       -- ^ Maximum time (in seconds) HTTP requests
+                                    -- should be limited to before exiting the
+                                    -- program.
+  , ilmDeleteDays      :: Int       -- ^ Max number of days to retain indices
+  , ilmMaxSize         :: Int       -- ^ Max size for active index rollover in GB
+  , logFormat          :: LogFormat -- ^ What logging format to use.
+  , logVerbose         :: Bool      -- ^ Whether to log verbosely
+  , metricsPort        :: Int       -- ^ Optional port to expose metrics over.
+  , metricsWakeup      :: Int       -- ^ Period in seconds that the queue metrics
+                                    -- thread will wait for in between
+                                    -- instrumentation measurements
+  , noILM              :: Bool      -- ^ Whether or not to use ILM for index rotation.
+  , queueScalingFactor :: Natural   -- ^ Factor applied to service count for metrics queue
+  , serviceScalingCap  :: Int       -- ^ A maximum value for how to scale the in-memory metrics document queue.
+  , servicesCli        :: [Text]    -- ^ Which services to collect analytics for.
   }
+
+-- |Represents what format to keep logs in
+data LogFormat = LogFormatJSON | LogFormatBracket
+               deriving (Enum, Eq, Bounded)
+
+instance Show LogFormat where
+  show LogFormatJSON = "json"
+  show LogFormatBracket = "bracket"
+
+readLogFormat :: ReadM LogFormat
+readLogFormat = eitherReader $ \cliArg ->
+  case lookup cliArg mapping  of
+    Just format -> Right format
+    Nothing -> Left $ "Accepted types for log formats: "
+                   <> intercalate ", " (map show constructors)
+  where
+    constructors = [minBound..maxBound]
+    mapping = map (\x -> (show x, x)) constructors
 
 -- |Enumerates all the environment variables we expect.
 data EnvOptions =

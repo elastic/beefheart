@@ -10,6 +10,7 @@ import Beefheart
 import RIO hiding (bracket, tryAny)
 import RIO.Orphans ()
 import RIO.Text (pack)
+import RIO.List (intercalate)
 
 -- A third-party exceptions package that offers a few more guarantees
 import Control.Exception.Safe
@@ -101,12 +102,14 @@ cliOptions = CliOptions
       <> value 20
       <> metavar "GB"
     )
-  <*> switch
-    ( long "no-ilm"
-      <> help ("Whether or not to rely on ILM for index rotation and curation. "
-            <> "Requires basic (non-OSS) Elasticsearch distribution. "
-            <> "If set, rely on date pattern strategy instead."
-            )
+  -- Configurable logging format
+  <*> option readLogFormat
+    ( long "log-format"
+      <> short 'f'
+      <> help ( "Logging format. Valid options are: "
+             <> intercalate ", " (map show [(minBound :: LogFormat)..maxBound])
+              )
+      <> value LogFormatBracket
       <> showDefault
     )
   -- Simple verbose switch
@@ -130,6 +133,15 @@ cliOptions = CliOptions
       <> showDefault
       <> value 1
       <> metavar "SECONDS"
+    )
+  -- Whether to use/not use ILM
+  <*> switch
+    ( long "no-ilm"
+      <> help ("Whether or not to rely on ILM for index rotation and curation. "
+            <> "Requires basic (non-OSS) Elasticsearch distribution. "
+            <> "If set, rely on date pattern strategy instead."
+            )
+      <> showDefault
     )
   -- Parse the multiplicative queue scaling factor
   <*> option auto
@@ -232,7 +244,10 @@ main = do
 
       -- Bolt together some values to setup a logging environment.
       let severityFilter = if logVerbose options then DebugS else InfoS
-      handleScribe <- mkHandleScribe ColorIfTerminal stderr (permitItem severityFilter) V2
+          -- Need this little function signature to help out the type checker
+          logFormatter :: forall a. LogItem a => ItemFormatter a
+          logFormatter = if logFormat options == LogFormatJSON then jsonFormat else bracketFormat
+      handleScribe <- mkHandleScribeWithFormatter logFormatter ColorIfTerminal stderr (permitItem severityFilter) V2
       let mkLogEnv = registerScribe "stderr" handleScribe defaultScribeSettings
                      =<< initLogEnv applicationName (appEnvironment vars)
       -- This nests everything that happens next underneath a context that has
