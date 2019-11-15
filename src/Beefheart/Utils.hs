@@ -26,7 +26,7 @@ abort message = do
   exitFailure
 
 -- |Just so we define it in one place
-applicationName :: Text
+applicationName :: IsString a => a
 applicationName = "beefheart"
 
 -- |Initially wait one second, backoff exponentially, then concede to the

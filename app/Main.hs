@@ -7,13 +7,15 @@ import Beefheart
 -- community-standardized tools like `text` and `async`.
 --
 -- We hide `tryAny`, since we're using a different exceptions package.
-import RIO hiding (tryAny)
+import RIO hiding (bracket, tryAny)
 import RIO.Orphans ()
 import RIO.Text (pack)
 
 -- A third-party exceptions package that offers a few more guarantees
 import Control.Exception.Safe
 import GHC.Natural (intToNatural)
+-- Our logging library
+import Katip
 -- Think of the equivalent to python's `requests`
 import Network.HTTP.Req hiding (header)
 -- CLI option parsing.
@@ -228,11 +230,16 @@ main = do
           -- versus a hard limit.
           $ min (length services) (serviceScalingCap options)
 
-      -- Setup a log function, then...
-      logOptions <- logOptionsHandle stderr (logVerbose options)
-      -- nest our application within a context that has a log handling function
-      -- (`lf`)
-      withLogFunc logOptions $ \lf -> do
+      -- Bolt together some values to setup a logging environment.
+      let severityFilter = if logVerbose options then DebugS else InfoS
+      handleScribe <- mkHandleScribe ColorIfTerminal stderr (permitItem severityFilter) V2
+      let mkLogEnv = registerScribe "stderr" handleScribe defaultScribeSettings
+                     =<< initLogEnv applicationName (appEnvironment vars)
+      -- This nests everything that happens next underneath a context that has
+      -- logging functionality. `bracket` accepts a function to open up some
+      -- resource, a function to call that cleans up that resource, and finally
+      -- a block of code to run.
+      bracket mkLogEnv closeScribes $ \le -> do
         -- This is our core datatype; our `App` that houses our logging hook,
         -- configuration information, etc.
         let app = App
@@ -241,7 +248,9 @@ main = do
                   , appEnv = vars
                   , appESURI = esURI
                   , appFastlyServices = services
-                  , appLogFunc = lf
+                  , appLogContext = mempty
+                  , appLogEnv = le
+                  , appLogNamespace = "main"
                   , appQueue = metricsQueue
                   }
 
@@ -268,10 +277,10 @@ main = do
           resp <- tryAny (either bootstrap bootstrap esURI)
           case resp of
             Left e -> do
-              logError . display $ tshow e
+              logLocM ErrorS . ls $ tshow e
               exitFailure
             Right _r ->
-              logDebug . display $ "Successfully created ES templates for " <> esIndex options
+              logLocM DebugS . ls $ "Successfully created ES templates for " <> esIndex options
 
           -- Because we support either timestamp-appended indices or automagic
           -- ILM index rollover, naming the index varies depending on whether

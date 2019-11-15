@@ -18,6 +18,7 @@ import Control.Monad.Loops (iterateM_)
 import Control.Retry
 import Data.Aeson (FromJSON)
 import Data.Time.Clock.POSIX
+import Katip
 import qualified Network.HTTP.Client as HTTP
 import Network.HTTP.Req hiding (header)
 
@@ -68,7 +69,7 @@ metricsRunner indexNamer service = do
   -- Before entering the metrics fetching loop, record the service's details in EKG.
   liftIO $ EKG.createLabel (metricN service) ekg >>= flip Label.set serviceName
 
-  logDebug . display $ "Entering metrics loop for service '" <> serviceName <> "'"
+  logLocM DebugS . ls $ "Entering metrics loop for service '" <> serviceName <> "'"
   let
     -- A function that accepts a timestamp and spits back `Analytics` values.
     getMetrics = fetchMetrics counter apiKey service
@@ -85,19 +86,19 @@ metricsRunner indexNamer service = do
     -- A bad response that we don't want to retry. Log the reason, then we end
     -- the loop - other threads live on.
     handleException (VanillaHttpException (HTTP.HttpExceptionRequest _request exception)) =
-      logError . display $ "Killing metrics loop for '" <> serviceName
+      logLocM WarningS . ls $ "Killing metrics loop for '" <> serviceName
                         <> "'. Encountered: " <> tshow exception
     -- This means Fastly returned malformed json. Assume something is awry
     -- upstream, let the process die by re-throwing and thus tearing all other
     -- threads down along with it.
     handleException e@(JsonHttpException reason) = do
-      logError . display $ "Fastly handed us back bad json: " <> pack reason
+      logLocM ErrorS . ls $ "Fastly handed us back bad json: " <> reason
       throw e
     -- We've malformed our request URL? Something is _wrong_ in our code, log
     -- the reason and similarly let the exception propagate up because we don't
     -- want to spew malformed content.
     handleException e@(VanillaHttpException (HTTP.InvalidUrlException url reason)) = do
-      logError . display $ "We malformed this URL: " <> pack url <> ". Reason: " <> pack reason
+      logLocM ErrorS . ls $ "We malformed this URL: " <> url <> ". Reason: " <> reason
       throw e
   -- iterateM_ executes a monadic action (here, IO) and runs forever,
   -- feeding the return value into the next iteration, which fits well with
@@ -147,8 +148,8 @@ indexingRunner = do
       either (indexAnalytics docs) (indexAnalytics docs) esURI
   -- Indefinitely retry (on most exceptions) our indexing action.
   bulkResponse <- recovering backoffAndKeepTrying [handler] runIndex
-  let indexed = display $ length $ filter isNothing $ map error $ concatMap HM.elems $ items $ responseBody bulkResponse
-  logDebug $ "Indexed " <> indexed <> " docs"
+  let indexed = tshow . length . filter isNothing . map error . concatMap HM.elems . items . responseBody
+  logLocM DebugS . ls $ "Indexed " <> indexed bulkResponse <> " docs"
   -- Sleep for a time before performing another bulk operation.
   sleepSeconds (esFlushDelay cliArgs)
   indexingRunner
@@ -162,15 +163,15 @@ indexingRunner = do
       let retryNote = "Retry attempt " <> tshow (rsIterNumber retryStatus) <> "."
       case exception of
         (VanillaHttpException (HTTP.HttpExceptionRequest _ e)) -> do
-          logError . display $
+          logLocM WarningS . ls $
             "Encountered ES indexing error: " <> tshow e
             <> ". " <> retryNote
           return True
         (VanillaHttpException (HTTP.InvalidUrlException _ _)) -> do
-          logError "Somehow we malformed a URL to Elasticsearch - how did that happen? Bailing out."
+          logLocM ErrorS $ ls ("Somehow we malformed a URL to Elasticsearch - how did that happen? Bailing out." :: Text)
           return False
         (JsonHttpException e) -> do
-          logError . display $
+          logLocM WarningS . ls $
             "Bad response from Elasticsearch: " <> pack e
             <> ". " <> retryNote
           return True

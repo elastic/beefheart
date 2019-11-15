@@ -28,6 +28,7 @@ dependencies:
 - envy
 - http-client
 - http-types
+- katip
 - lens
 - lens-aeson
 - monad-loops

@@ -24,6 +24,7 @@ module Beefheart.Types
 import RIO
 import RIO.Char
 import RIO.Time
+import RIO.Text (pack)
 
 import Control.Exception.Safe
 import Data.Aeson
@@ -33,6 +34,7 @@ import Data.Aeson
 -- problems.
 import Data.Scientific
 import Data.Time.Clock.POSIX (POSIXTime)
+import Katip
 import Network.HTTP.Req
 import System.Envy hiding (Option, Parser, (.=))
 
@@ -79,9 +81,10 @@ data CliOptions =
 -- |Enumerates all the environment variables we expect.
 data EnvOptions =
   EnvOptions
-  { fastlyKey  :: Text
-  , esUsername :: Maybe Text
-  , esPassword :: Maybe Text
+  { appEnvironment :: Environment
+  , fastlyKey      :: Text
+  , esUsername     :: Maybe Text
+  , esPassword     :: Maybe Text
   } deriving (Generic, Show)
 
 -- |Although `envy` does support deriving Generic, this and `ToEnv` are
@@ -92,7 +95,8 @@ data EnvOptions =
 instance FromEnv EnvOptions where
   fromEnv _ =
     EnvOptions
-    <$> env "FASTLY_KEY"
+    <$> envMaybe "ENVIRONMENT" E..!= "development"
+    <*> env "FASTLY_KEY"
     <*> envMaybe "ES_USERNAME"
     <*> envMaybe "ES_PASSWORD"
 
@@ -101,10 +105,15 @@ instance FromEnv EnvOptions where
 instance ToEnv EnvOptions where
   toEnv EnvOptions {..} =
     makeEnv
-    [ "FASTLY_KEY"  E..= fastlyKey
+    [ "ENVIRONMENT" E..= appEnvironment
+    , "FASTLY_KEY"  E..= fastlyKey
     , "ES_USERNAME" E..= esUsername
     , "ES_PASSWORD" E..= esPassword
     ]
+
+-- |Minor addition to support constructing an `Environment` from environment
+-- variables.
+instance Var Environment where toVar = show ; fromVar = Just . Environment . pack
 
 -- |This is the application environment that RIO requires as its ReaderT value.
 -- This value will be readable from our application context wherever we run it.
@@ -114,7 +123,9 @@ data App = App
   , appEnv            :: EnvOptions
   , appESURI          :: ElasticsearchURI
   , appFastlyServices :: [Text]
-  , appLogFunc        :: !LogFunc
+  , appLogContext     :: LogContexts
+  , appLogEnv         :: LogEnv
+  , appLogNamespace   :: Namespace
   , appQueue          :: TBQueue BulkOperation
   }
 
@@ -142,9 +153,18 @@ instance MonadHttp (RIO App) where
       }
   handleHttpException = throw
 
--- |Some boilerplate to support the previous record.
-instance HasLogFunc App where
-  logFuncL = lens appLogFunc (\x y -> x { appLogFunc = y })
+-- |Plumbing to let our App work as a Katip, or logging, Monad
+instance Katip (RIO App) where
+  getLogEnv = asks appLogEnv
+  localLogEnv f (RIO app) = RIO (local (\s -> s { appLogEnv = f (appLogEnv s)}) app)
+
+-- |As with `Katip m`, but for the more powerful `KatipContext` Monad
+instance KatipContext (RIO App) where
+  getKatipContext = asks appLogContext
+  localKatipContext f (RIO app) = RIO (local (\s -> s { appLogContext = f (appLogContext s)}) app)
+
+  getKatipNamespace = asks appLogNamespace
+  localKatipNamespace f (RIO app) = RIO (local (\s -> s { appLogNamespace = f (appLogNamespace s)}) app)
 
 -- Fastly types
 --
