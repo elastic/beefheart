@@ -44,13 +44,13 @@ queueWatcher app gauge = do
   sleepSeconds (metricsWakeup $ appCli app)
   queueWatcher app gauge
 
--- |Self-contained IO action to regularly fetch and queue up metrics for storage
+-- |Self-contained function suitable to live in a standalone thrad that regularly fetches and queues up metrics for storage
 -- in Elasticsearch.
 metricsRunner
   :: (POSIXTime -> IndexName) -- ^ How to name indices
   -> Text -- ^ The Fastly service ID
   -> RIO App () -- ^ Our application monad
-metricsRunner indexNamer service = do
+metricsRunner indexNamer service = katipAddNamespace "metrics" $ do
   ekg <- asks appEKG
   envVars <- asks appEnv
   cli <- asks appCli
@@ -131,29 +131,20 @@ queueMetricsFor period q f getter ts = do
 -- up periodically to bulk index documents that it finds in our queue.
 -- indexingRunner
 indexingRunner :: RIO App ()
-indexingRunner = do
+indexingRunner =  do
   -- Pull some values out of our application environment
   queue <- asks appQueue
   cliArgs <- asks appCli
   esURI <- asks appESURI
 
-  -- See the comment on dequeueOperations for additional information, but
-  -- tl;dr, we should always get _something_ from this action. Note that
-  -- Elasticsearch will error out if we try and index nothing ([])
-  docs <- atomically $ dequeueOperations queue
-  let
-    -- This is the indexing action to call on the bulk API. We wrap it a little
-    -- so that our retrying library can use it.
-    runIndex _unusedRetryStatus =
-      either (indexAnalytics docs) (indexAnalytics docs) esURI
-  -- Indefinitely retry (on most exceptions) our indexing action.
-  bulkResponse <- recovering backoffAndKeepTrying [handler] runIndex
-  let indexed = length . filter isNothing . map error . concatMap HM.elems . items . responseBody
-  katipAddContext (MetricIndexed $ indexed bulkResponse) $
-    logLocM DebugS "Bulk indexing operation successful"
-  -- Sleep for a time before performing another bulk operation.
-  sleepSeconds (esFlushDelay cliArgs)
-  indexingRunner
+  -- Adds some scoping to our log messages that occur later
+  katipAddNamespace "indexer" $
+    -- Index documents indefinitely
+    forever $ do
+      -- Attempt to dequeue documents to index, then...
+      bulkIndexer backoffAndKeepTrying handler esURI queue
+      -- ...sleep the thread for a time.
+      sleepSeconds (esFlushDelay cliArgs)
   where
     -- This function is consulted each time an attempt fails to determine
     -- whether to try again (`True`) or let the exception propagate (`False`).
@@ -183,6 +174,37 @@ indexingRunner = do
       exponentialBackoff 1000000
       -- But don't wait longer than 10 minutes between attempts
       & capDelay (1000000 * 10)
+
+-- |Pull bulk operations out of a queue and index them.
+bulkIndexer
+  :: (MonadHttp m, MonadMask m, KatipContext m)
+  => RetryPolicyM m -- ^ Dictates how retries are performed
+  -> (RetryStatus -> Handler m Bool) -- ^ Retry logic/exception handler
+  -> ElasticsearchURI -- ^ ES Connection details
+  -> TBQueue BulkOperation -- ^ Our document queue
+  -> m ()
+bulkIndexer retryStrategy handler es queue = do
+  -- See the comment on dequeueOperations for additional information, but
+  -- tl;dr, we should always get _something_ from this action. Note that
+  -- Elasticsearch will error out if we try and index nothing ([])
+  docs <- atomically $ dequeueOperations queue
+  let
+    -- This is the indexing action to call on the bulk API. We wrap it a
+    -- little so that our retrying library can use it.
+    runIndex _unusedRetryStatus =
+      either (indexAnalytics docs) (indexAnalytics docs) es
+  -- Indefinitely retry (on most exceptions) our indexing action.
+  bulkResponse <- recovering retryStrategy [handler] runIndex
+  let indexed = length . filter isNothing . map error . concatMap HM.elems . items . responseBody
+      logMetric = MetricIndexed $ indexed bulkResponse
+  -- Nest our debug logging message underneath a small black of code that
+  -- tacks on a metrics value onto our log message. This becomes important if
+  -- the user wants to log in json, as they'll end up with nicely formatted
+  -- fields for metrics.
+  katipAddContext logMetric $
+    -- The numbers are all we're interested in, so leave the textual string
+    -- empty
+    logLocM DebugS mempty
 
 -- |Flush Elasticsearch bulk operations that need to be indexed from our queue.
 dequeueOperations
