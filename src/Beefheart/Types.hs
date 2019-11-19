@@ -18,6 +18,7 @@ module Beefheart.Types
   , LogFormat(..)
   , MappingName(..)
   , Metrics
+  , MetricIndexed(..)
   , PointOfPresence
   , ServiceDetails(..)
   , readLogFormat
@@ -438,3 +439,16 @@ instance ToJSON AnalyticsMapping where
       --   [ "type" .= ("long" :: Text) ]
       ]
     ]
+
+-- |A type representing a metric that signals how many documents have been
+-- indexed
+newtype MetricIndexed = MetricIndexed Int
+-- |How this metric should be rendered as JSON
+instance ToJSON MetricIndexed where
+  toJSON (MetricIndexed n) = object [ "indexed_documents" .= n ]
+-- |How our logging driver should interpret the JSON
+instance ToObject MetricIndexed
+-- |How the logging driver should honor verbosity settings for this log item.
+-- This is pretty simple for now.
+instance LogItem MetricIndexed where
+  payloadKeys _verb _a = AllKeys

@@ -148,8 +148,9 @@ indexingRunner = do
       either (indexAnalytics docs) (indexAnalytics docs) esURI
   -- Indefinitely retry (on most exceptions) our indexing action.
   bulkResponse <- recovering backoffAndKeepTrying [handler] runIndex
-  let indexed = tshow . length . filter isNothing . map error . concatMap HM.elems . items . responseBody
-  logLocM DebugS . ls $ "Indexed " <> indexed bulkResponse <> " docs"
+  let indexed = length . filter isNothing . map error . concatMap HM.elems . items . responseBody
+  katipAddContext (MetricIndexed $ indexed bulkResponse) $
+    logLocM DebugS "Bulk indexing operation successful"
   -- Sleep for a time before performing another bulk operation.
   sleepSeconds (esFlushDelay cliArgs)
   indexingRunner
