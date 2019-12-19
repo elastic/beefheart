@@ -44,7 +44,7 @@ queueWatcher app gauge = do
   sleepSeconds (metricsWakeup $ appCli app)
   queueWatcher app gauge
 
--- |Self-contained function suitable to live in a standalone thrad that regularly fetches and queues up metrics for storage
+-- |Self-contained function suitable to live in a standalone thread that regularly fetches and queues up metrics for storage
 -- in Elasticsearch.
 metricsRunner
   :: (POSIXTime -> IndexName) -- ^ How to name indices
