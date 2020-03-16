@@ -76,6 +76,30 @@ metricsRunner indexNamer service = katipAddNamespace "metrics" $ do
     -- Helper to take raw `Analytics` and transform them into Elasticsearch
     -- bulk items.
     toDocs = toBulkOperations indexNamer serviceName
+    -- In practice, the `req` library does miss _some_ exceptions that we would
+    -- want to retry, because the library assumes that a request will at least
+    -- reach the point that we can pull out a status code, but results like
+    -- timeouts can't get that far. So we do use a small `retry` wrapper to get
+    -- ahead of some exceptions we want to natively retry before admitting
+    -- defeat. Also note that this means we'll wrap our IO action thread in a
+    -- retry higher-order function before a traditional `catch`-style exception
+    -- handler, so when a request fails, we run it through a quick retry check,
+    -- then only let it past that gate once we're sure it's time to kill
+    -- something.
+    shouldRetry retryStatus = Handler $ \case
+      -- A simple timeout - these are safe to retry.
+      (VanillaHttpException (HTTP.HttpExceptionRequest _request HTTP.ResponseTimeout)) -> do
+        logLocM WarningS . ls $ "Encountered HTTP response timeout fetching metrics for '"
+          <> serviceName <> "'. Retry attempt: " <> tshow (rsIterNumber retryStatus)
+        return True
+      -- Similarly, we don't consider connection timeouts catastrophic events.
+      (VanillaHttpException (HTTP.HttpExceptionRequest _request HTTP.ConnectionTimeout)) -> do
+        logLocM WarningS . ls $ "Encountered connection timeout fetching metrics for '"
+          <> serviceName <> "'. Retry attempt: " <> tshow (rsIterNumber retryStatus)
+        return True
+      _ -> do
+        logLocM WarningS "Encountered a non-recoverable error. Bailing out."
+        return False
     -- Our exception handler for HTTP exceptions. Elsewhere, we define the
     -- conditions for why we would want to retry something, so if we hit this
     -- point, it stands to reason that the exception is unrecoverable, so offer
@@ -83,8 +107,10 @@ metricsRunner indexNamer service = katipAddNamespace "metrics" $ do
     -- that all the possible exceptions to follow will come from HTTP calls to
     -- Fastly, not Elasticsearch.
     --
-    -- A bad response that we don't want to retry. Log the reason, then we end
-    -- the loop - other threads live on.
+    -- A bad response that we either don't want to retry, or has been retried
+    -- too many times. Log the reason, then we end the loop - other threads live
+    -- on. This might occur, for example, if the Fastly service disappears
+    -- unexpectedly.
     handleException (VanillaHttpException (HTTP.HttpExceptionRequest _request exception)) =
       logLocM WarningS . ls $ "Killing metrics loop for '" <> serviceName
                         <> "'. Encountered: " <> tshow exception
@@ -100,14 +126,22 @@ metricsRunner indexNamer service = katipAddNamespace "metrics" $ do
     handleException e@(VanillaHttpException (HTTP.InvalidUrlException url reason)) = do
       logLocM ErrorS . ls $ "We malformed this URL: " <> url <> ". Reason: " <> reason
       throw e
-  -- iterateM_ executes a monadic action (here, IO) and runs forever,
-  -- feeding the return value into the next iteration, which fits well with
-  -- our use case: keep hitting Fastly and feed the previous timestamp into
-  -- the next request.
-  iterateM_ (queueMetricsFor (fastlyPeriod cli) q toDocs getMetrics) 0
-    -- In the course of our event loop, we want to notice if something _really_
-    -- fatal happens, and tell us why. See `handleException` for how we handle it.
-    `catch` handleException
+  -- We wrap the whole thing in `recovering`, because we want to retry a few
+  -- situations at the top-level before falling through to the exception
+  -- handler.
+  recovering
+    (backoffThenGiveUp (cli & httpRetryLimit)) -- how to back off
+    [shouldRetry] -- "which exceptions should we retry?"
+    -- iterateM_ executes a monadic action (here, IO) and runs forever,
+    -- feeding the return value into the next iteration, which fits well with
+    -- our use case: keep hitting Fastly and feed the previous timestamp into
+    -- the next request.
+    (\_ -> iterateM_ (queueMetricsFor (fastlyPeriod cli) q toDocs getMetrics) 0)
+      -- Finally, if `recovering` bails out, this is our cleanup function. In
+      -- practice, we just interrogate the exception to provide some logging
+      -- explanation for terminating this thread (and potentially the whole
+      -- process).
+      `catch` handleException
 
 -- |Higher-order function suitable to be fed into iterate that will be the main
 -- metrics retrieval loop. Get a timestamp, fetch some metrics for that
