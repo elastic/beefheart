@@ -173,6 +173,7 @@ instance MonadHttp (RIO App) where
     -- our default retry policy looks like.
     return $ defaultHttpConfig
       { httpConfigCheckResponse = reqCheckResponse
+      , httpConfigRetryJudge = reqRetryJudge
       , httpConfigRetryPolicy = backoffThenGiveUp (app & appCli & httpRetryLimit)
       }
   handleHttpException = throw
