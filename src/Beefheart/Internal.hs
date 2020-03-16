@@ -223,19 +223,13 @@ dequeueOperations q = do
   flushTBQueue q
 
 -- |Retrieve real-time analytics from Fastly (with retries)
--- fetchMetrics
---   :: Counter.Counter -- ^ An EKG counter to track request activity
---   -> Text            -- ^ Fastly API key
---   -> Text            -- ^ ID of the Fastly service we want to inspect
---   -> POSIXTime       -- ^ Timestamp for analytics
---   -> IO (Either HttpException (JsonResponse Analytics))
 fetchMetrics
   :: (MonadHttp m, MonadIO m, FromJSON a)
-  => Counter.Counter
-  -> Text
-  -> Text
-  -> POSIXTime
-  -> m (JsonResponse a)
+  => Counter.Counter    -- ^ An EKG counter to track request activity
+  -> Text               -- ^ Fastly API key
+  -> Text               -- ^ ID of the Fastly service we want to inspect
+  -> POSIXTime          -- ^ Timestamp for analytics
+  -> m (JsonResponse a) -- ^ We expect json metrics back
 fetchMetrics counter key service ts = do
   -- Immediately prior to the Fastly request, hit the counter.
   liftIO $ Counter.inc counter
