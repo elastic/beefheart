@@ -75,7 +75,7 @@ metricsRunner indexNamer service = katipAddNamespace "metrics" $ do
     getMetrics = fetchMetrics counter apiKey service
     -- Helper to take raw `Analytics` and transform them into Elasticsearch
     -- bulk items.
-    toDocs = toBulkOperations indexNamer serviceName
+    toDocs = toBulkOperations indexNamer service serviceName
     -- In practice, the `req` library does miss _some_ exceptions that we would
     -- want to retry, because the library assumes that a request will at least
     -- reach the point that we can pull out a status code, but results like

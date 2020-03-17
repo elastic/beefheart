@@ -175,10 +175,11 @@ asNDJSON = foldl' bulkFormat ""
 -- `indexAnalytics`.
 toBulkOperations
   :: (POSIXTime -> IndexName) -- ^ Index prefix name generator
-  -> Text                -- ^ Human-readable name for service
-  -> Analytics           -- ^ Actual response from Fastly that needs to be converted
-  -> [BulkOperation]     -- ^ List of resultant `BulkOperation`s
-toBulkOperations indexNamer serviceName metrics = map toOperation . normalize $ metrics
+  -> Text                     -- ^ Fastly service ID
+  -> Text                     -- ^ Human-readable name for service
+  -> Analytics                -- ^ Actual response from Fastly that needs to be converted
+  -> [BulkOperation]          -- ^ List of resultant `BulkOperation`s
+toBulkOperations indexNamer serviceId serviceName metrics = map toOperation . normalize $ metrics
   where
     -- `normalize` in this context means taking an `Analytics` value and massaging it
     -- into the Aeson `Value` (or JSON) that we'd ultimately like it to be
@@ -188,7 +189,7 @@ toBulkOperations indexNamer serviceName metrics = map toOperation . normalize $ 
     normalize analytics = fData analytics >>= toESDoc
     -- Given a `Datacenter`, extract the list of metrics, and fold the
     -- `HashMap` into a list of `Value`s.
-    toESDoc metrics' = HML.foldlWithKey' (encodeMetrics serviceName $ recorded metrics') []
+    toESDoc metrics' = HML.foldlWithKey' (encodeMetrics serviceId serviceName $ recorded metrics') []
                       $ datacenter metrics'
 
     -- Take an Aeson `Value` and put it into BulkOperation form.
@@ -212,13 +213,14 @@ datePatternIndexName prefix datePattern ts =
 -- initially with some static values (like the service name and timestamp the
 -- metrics were recorded at) and be used as a higher-order argument to a fold.
 encodeMetrics
-  :: Text            -- ^ Human-readable service name
+  :: Text            -- ^ Fastly service ID
+  -> Text            -- ^ Human-readable service name
   -> POSIXTime       -- ^ Time that the metrics were recorded
   -> [Value]         -- ^ Accumulated value
   -> PointOfPresence -- ^ Where the metrics were recorded
   -> Metrics         -- ^ Metrics we'd like to munge into a new `Value`
   -> [Value]         -- ^ Accumulated value from the `fold`
-encodeMetrics serviceName ts acc pop metrics = mergedObject : acc
+encodeMetrics serviceId serviceName ts acc pop metrics = mergedObject : acc
   -- While the vanilla `Metrics` we get from Fastly are fine, enriching the
   -- value with a top-level key for the datacenter it came from along with the
   -- timestamp makes the documents easier to visualize and query.
@@ -226,6 +228,7 @@ encodeMetrics serviceName ts acc pop metrics = mergedObject : acc
                        [ object
                          [ "pointofpresence" .= pop
                          , "service" .= serviceName
+                         , "service_id" .= serviceId
                          -- Formatting the timestamp explicitly instead of
                          -- using a unix-style epoch timestamp avoids ambiguity
                          -- that I observed between versions 6 and 7 of
