@@ -97,8 +97,8 @@ metricsRunner indexNamer service = katipAddNamespace "metrics" $ do
         logLocM WarningS . ls $ "Encountered connection timeout fetching metrics for '"
           <> serviceName <> "'. Retry attempt: " <> tshow (rsIterNumber retryStatus)
         return True
-      _ -> do
-        logLocM WarningS "Encountered a non-recoverable error. Bailing out."
+      e -> do
+        logLocM WarningS . ls $ "Encountered a non-recoverable error. Bailing out: " <> tshow e
         return False
     -- Our exception handler for HTTP exceptions. Elsewhere, we define the
     -- conditions for why we would want to retry something, so if we hit this
