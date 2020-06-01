@@ -3,8 +3,7 @@ version:             0.2.5.0
 license:             Apache
 license-file:        LICENSE
 author:              "Elastic Infra Team"
-maintainer:          "infra@elastic.co"
-copyright:           "2019 Elasticsearch, Inc"
+copyright:           "2020 Elasticsearch, Inc"
 
 extra-source-files:
 - README.md
@@ -16,7 +15,7 @@ extra-source-files:
 # To avoid duplicated efforts in documentation and dealing with the
 # complications of embedding Haddock markup inside cabal files, it is
 # common to point users to the README.md file.
-description:         Please see the README on GitHub at <https://github.com/tylerjl/beefheart#readme>
+description:         Please see the README on GitHub at <https://github.com/elastic/beefheart#readme>
 
 dependencies:
 - aeson
