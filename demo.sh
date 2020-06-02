@@ -10,9 +10,9 @@ function cleanup_containers() {
 
 # Shrink down the default ES memory values for just a demo
 docker run -d --name beefheart-es     -p9200:9200 -e ES_JAVA_OPTS="-Xms256M -Xmx256M" -e discovery.type=single-node \
-       docker.elastic.co/elasticsearch/elasticsearch:7.4.0
+       docker.elastic.co/elasticsearch/elasticsearch:7.7.0
 docker run -d --name beefheart-kibana -p5601:5601 -e ELASTICSEARCH_HOSTS=http://beefheart-es:9200 --link beefheart-es \
-       docker.elastic.co/kibana/kibana:7.4.0
+       docker.elastic.co/kibana/kibana:7.7.0
 
 # Give our containers some time to come online before the app, which needs the
 # API available to load in values like mappings.

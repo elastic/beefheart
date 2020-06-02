@@ -28,11 +28,11 @@ pull-test-images: pull-es-image pull-kibana-image ## Prefetch Docker images used
 
 .PHONY: pull-es-image
 pull-es-image: ## Prefetch Elasticsearch test image
-	docker pull docker.elastic.co/elasticsearch/elasticsearch:7.4.0
+	docker pull docker.elastic.co/elasticsearch/elasticsearch:7.7.0
 
 .PHONY: pull-kibana-image
 pull-kibana-image: ## Prefetch Kibana test image
-	docker pull docker.elastic.co/kibana/kibana:7.4.0
+	docker pull docker.elastic.co/kibana/kibana:7.7.0
 
 .PHONY: help
 help:  ## Display this help
