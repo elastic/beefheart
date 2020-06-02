@@ -65,7 +65,7 @@ Beefheart provides useful real-world Haskell examples for:
 
 ## Maintenance
 
-This project is provided as a utility to the Elasticsearch community and is not an officially supported product.
+This project is provided as a utility to the Elastic community and is not an officially supported product.
 Responsiveness to contributions, bugfixes, and features will be collaboratively supported on a best-effort basis.
 
 ### Licensing
