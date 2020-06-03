@@ -39,7 +39,7 @@ unitTests =
 -- works.
 integrationTests :: TestTree
 integrationTests =
-  withResource (elasticsearchContainer "7.4.0") containerCleanup $ \_cid ->
+  withResource (elasticsearchContainer "7.7.0") containerCleanup $ \_cid ->
     testGroup "Integration Tests"
     -- First, confirm the API is responsive.
     [ testCase "Elasticsearch is UP" $ do
