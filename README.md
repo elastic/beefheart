@@ -13,6 +13,7 @@ Prerequisites:
   - [stack](https://docs.haskellstack.org/en/stable/README/)
 - Run or Demo
   - Fastly API key available in environment variable `FASTLY_KEY`
+  - Docker
 
 The following command will look for your Fastly API key in the environment variable `FASTLY_KEY` and, by default, send metrics documents to a local Elasticsearch listener at `http://localhost:9200`.
 
