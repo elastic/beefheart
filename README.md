@@ -43,6 +43,13 @@ $ make demo
 And open http://localhost:5601 to begin creating dashboards from your Fastly metrics.
 Use `Ctrl-C` to stop the demo, which will cleanup any Docker containers.
 
+If you'd like to run the application with custom flags or settings, invoke the command with `stack`, passing in arguments in the following format:
+
+```console
+$ stack exec beefheart -- --help
+<help output>
+```
+
 ## Why?
 
 Fastly provides a [real-time analytics API](https://developer.fastly.com/reference/api/metrics-stats/realtime/) that exposes a variety of metrics across services for a given account that include useful insights like transmitted bytes, number of hits, and number of requests.
