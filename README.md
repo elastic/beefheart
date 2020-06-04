@@ -91,3 +91,12 @@ Adding support for missing features to Bloodhound and using it in Beefheart woul
 
 The Stack Infrastructure team at Elastic has a tradition of naming some projects after our favorite celebrities.
 [Guy Fieri](https://en.wikipedia.org/wiki/Guy_Fieri) is one of our honored team mascots, and the name for this project was picked from a [satirical restaurant menu](http://www.grubstreet.com/2013/02/guy-fieri-guys-american-kitchen-fake-website.html). 
+
+## Wishlist
+
+Beefheart tries to avoid overly complex abstractions, so if you want to contribute, please do!
+Here are some ideas:
+
+- [ ] Standardized bracket or json log formatting everywhere in the code (for example, picking out any simple printed output)
+- [ ] Add the ability to send EKG metrics to Elasticsearch
+- [ ] Enrich point-of-presence codes with human-readable names using the [datacenter API](https://developer.fastly.com/reference/api/utils/datacenter/)
