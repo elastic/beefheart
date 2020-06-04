@@ -90,7 +90,9 @@ setupAlias esIndex esUrl opts =
             ]
           ]
 
--- |Setup ILM policy.
+-- |Setup ILM policy. This can be pretty fancy, but all that we do with our
+-- policy is to rollover indices at a certain size, and then delete them out of
+-- the cluster after a given number of days.
 setupILM
   :: (MonadHttp m)
   => Int -- ^ Max index size before rotation
@@ -153,6 +155,8 @@ indexAnalytics operations (url, opts) =
   req POST (url /: "_bulk") body jsonResponse (opts <> contentType)
   where
     body = ReqBodyLbs $ asNDJSON operations
+    -- This piece is especially important for later versions of Elasticsearch
+    -- that _require_ a `Content-type` header.
     contentType = header "Content-Type" "application/x-ndjson"
 
 -- |Transforms (usually) a list of `BulkOperation`s into a newline-delimited
@@ -163,6 +167,9 @@ asNDJSON
   -> BSL.ByteString -- ^ Raw `ByteString` to send over HTTP
 asNDJSON = foldl' bulkFormat ""
   where
+    -- Converting a list of elements into a bulk string is typically something
+    -- like standard ES libraries do, but writing our own newline-delimited JSON
+    -- string isn't too hard, and we can `fold` it, too.
     bulkFormat jsonLines (BulkIndexAuto (IndexName n) (MappingName _) value) =
       jsonLines
       <> encode (object [ "index" .= object [ "_index" .= n ] ])
@@ -181,11 +188,12 @@ toBulkOperations
   -> [BulkOperation]          -- ^ List of resultant `BulkOperation`s
 toBulkOperations indexNamer serviceId serviceName metrics = map toOperation . normalize $ metrics
   where
-    -- `normalize` in this context means taking an `Analytics` value and massaging it
-    -- into the Aeson `Value` (or JSON) that we'd ultimately like it to be
-    -- represented as in Elasticsearch. Note that because each response from
-    -- Fastly includes an array of metrics from each `PointOfPresence`,
-    -- we'll get a list of `Value`s from one `Analytics` value here.
+    -- `normalize` in this context means taking an `Analytics` value and
+    -- massaging it into the Aeson `Value` (or JSON) that we'd ultimately like
+    -- it to be represented as in Elasticsearch. Note that because each response
+    -- from Fastly includes an array of metrics from each `PointOfPresence`,
+    -- we'll get a list of `Value`s from one `Analytics` value here (pull out
+    -- the list of metrics, convert each `toESDoc`)
     normalize analytics = fData analytics >>= toESDoc
     -- Given a `Datacenter`, extract the list of metrics, and fold the
     -- `HashMap` into a list of `Value`s.

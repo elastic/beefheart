@@ -54,7 +54,7 @@ autodiscoverServices
   => Text -- ^ Fastly API Key
   -> m [Text] -- ^ List of Fastly service IDs
 autodiscoverServices key' = do
-  serviceListResponse <- fastlyReq FastlyRequest
+  (respList :: JsonResponse Value) <- fastlyReq FastlyRequest
     { apiKey  = key'
     , service = ServicesAPI
     }
@@ -64,10 +64,9 @@ autodiscoverServices key' = do
   -- a more succinct way. This sequence of functions says "grab a list of
   -- values from the 'data' key, flatten out the structure into plain
   -- key/value pairs, and return the 'id' key of each as a `String`".
-  let serviceList = (responseBody serviceListResponse :: Value) ^.. key "data" . values . key "id" . _String
   runSimpleApp $
-    case serviceList of
+    case responseBody respList ^.. key "data" . values . key "id" . _String of
       [] -> abort ("Didn't find any Fastly services to monitor." :: Text)
-      _ -> logInfo . display $
-        "Found " <> tshow (length serviceList) <> " services."
-  return serviceList
+      services -> do
+        logInfo . display $ "Found " <> tshow (length services) <> " services."
+        return services

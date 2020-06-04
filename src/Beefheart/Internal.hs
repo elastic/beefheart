@@ -33,6 +33,8 @@ import Beefheart.Types
 import Beefheart.Utils
 
 -- |Small utility to keep an eye on our bulk operations queue.
+--
+-- Check the queue length, set the EKG gauge, sleep, and recurse.
 queueWatcher
   :: (MonadIO m)
   => App         -- ^ Our RIO application env
@@ -44,8 +46,8 @@ queueWatcher app gauge = do
   sleepSeconds (metricsWakeup $ appCli app)
   queueWatcher app gauge
 
--- |Self-contained function suitable to live in a standalone thread that regularly fetches and queues up metrics for storage
--- in Elasticsearch.
+-- |Self-contained function suitable to live in a standalone thread that
+-- regularly fetches and queues up metrics for storage in Elasticsearch.
 metricsRunner
   :: (POSIXTime -> IndexName) -- ^ How to name indices
   -> Text -- ^ The Fastly service ID
@@ -57,6 +59,8 @@ metricsRunner indexNamer service = katipAddNamespace "metrics" $ do
   q <- asks appQueue
   let apiKey = fastlyKey envVars
 
+  -- This ends up being an alphanumeric ID, but we store the human-readable name
+  -- later.
   counter <- liftIO $ EKG.createCounter (metricN $ "requests-" <> service) ekg
 
   -- Fetch the service ID's details (to get the human-readable name)
@@ -66,10 +70,12 @@ metricsRunner indexNamer service = katipAddNamespace "metrics" $ do
     }
   let serviceName = name $ responseBody serviceDetails
 
-  -- Before entering the metrics fetching loop, record the service's details in EKG.
+  -- Before entering the metrics fetching loop, record the service's details in
+  -- EKG.
   liftIO $ EKG.createLabel (metricN service) ekg >>= flip Label.set serviceName
 
-  logLocM DebugS . ls $ "Entering metrics loop for service '" <> serviceName <> "'"
+  logLocM DebugS . ls $
+    "Entering metrics loop for service '" <> serviceName <> "'"
   let
     -- A function that accepts a timestamp and spits back `Analytics` values.
     getMetrics = fetchMetrics counter apiKey service
@@ -136,6 +142,9 @@ metricsRunner indexNamer service = katipAddNamespace "metrics" $ do
     -- feeding the return value into the next iteration, which fits well with
     -- our use case: keep hitting Fastly and feed the previous timestamp into
     -- the next request.
+    --
+    -- We don't make any decisions about how to send requests based upon the
+    -- latest retry status, so discard the first argument passed to our loop.
     (\_ -> iterateM_ (queueMetricsFor (fastlyPeriod cli) q toDocs getMetrics) 0)
       -- Finally, if `recovering` bails out, this is our cleanup function. In
       -- practice, we just interrogate the exception to provide some logging
@@ -164,6 +173,10 @@ queueMetricsFor period q f getter ts = do
 -- |A self-contained indexing runner intended to be run within a thread. Wakes
 -- up periodically to bulk index documents that it finds in our queue.
 -- indexingRunner
+--
+-- Note that everything configurable that we care about is within our `App`
+-- type, and living in `RIO` means we can run I/O, so the type signature here is
+-- pretty simple.
 indexingRunner :: RIO App ()
 indexingRunner =  do
   -- Pull some values out of our application environment

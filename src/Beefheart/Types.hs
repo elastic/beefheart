@@ -88,10 +88,14 @@ data CliOptions =
 data LogFormat = LogFormatJSON | LogFormatBracket
                deriving (Enum, Eq, Bounded)
 
+-- |This just helps us have a user-friendly way of showing log format types to
+-- users when printing CLI options
 instance Show LogFormat where
   show LogFormatJSON = "json"
   show LogFormatBracket = "bracket"
 
+-- |Easy way to configure log formatting at the type level for
+-- optparse-applicative
 readLogFormat :: ReadM LogFormat
 readLogFormat = eitherReader $ \cliArg ->
   case lookup cliArg mapping  of
@@ -401,6 +405,7 @@ instance FromJSON BulkErrorReason where
     defaultOptions { fieldLabelModifier = mungeType }
 instance ToJSON BulkErrorReason
 
+-- |Another modifier since `type` is a keyword
 mungeType :: String -> String
 mungeType "_type" = "type"
 mungeType s = s
@@ -408,9 +413,10 @@ mungeType s = s
 -- |Just a helper to define index mappings.
 data AnalyticsMapping = AnalyticsMapping deriving (Show)
 
--- |Used by `Bloodhound` to define an index mapping. We manually define `toJSON`
--- for the data type since we'll never actually need to create an
--- `AnalyticsMapping` value - just hand it to `Bloodhound`.
+-- |Used by our HTTP request to define an index mapping. We manually define
+-- `toJSON` for the data type since we'll never actually need to create an
+-- `AnalyticsMapping` value - just hand it to Elasticsearch once to create the
+-- mapping.
 instance ToJSON AnalyticsMapping where
   toJSON AnalyticsMapping =
     object

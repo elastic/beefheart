@@ -178,17 +178,21 @@ main = do
   -- why our case statement is only checking for the parsed environment and
   -- whether the Elasticsearch URL is well-formed.
   case (env', parseUrl $ encodeUtf8 $ elasticsearchUrl options) of
-    -- finding `Nothing` means the API key isn't present, so fail fast here.
+    -- A `Left` on `env'` from `decodeEnv` means the API key isn't present, so
+    -- fail fast here.
     (Left envError, _) ->
       abort $ pack $ "Error: missing key environment variables: " <> envError
 
-    -- Getting `Nothing` from parseUrl is no good, either
+    -- Getting `Nothing` from parseUrl is no good, either - this means
+    -- `elasticsearchUrl` is somehow malformed.
     (_, Nothing) ->
       abort $ "Error: couldn't parse elasticsearch URL "
          <> elasticsearchUrl options
 
     -- `EnvOptions` only strictly requires a Fastly key, which is guaranteed
-    -- present if we make it this far.
+    -- present if we make it this far, so reaching this pattern match means we
+    -- have all the requisite environment variables and correctly-formatted CLI
+    -- flags.
     (Right vars, Just parsedUrl) -> do
       -- Two modes of operation are supported: explicit list of Fastly
       -- services, or if they aren't passed, pull in all that we can find over
@@ -199,12 +203,14 @@ main = do
                   else
                     return $ servicesCli options
 
-      -- For convenience, we run EKG.
+      -- For convenience, we run EKG, which will provide an instrumentation
+      -- dashboard at `http://localhost` on port `metricsPort options`.
       metricsStore <- EKG.newStore
       EKG.registerGcMetrics metricsStore
       _ <- EKG.forkServerWith metricsStore "0.0.0.0" (metricsPort options)
 
-      -- With our metrics/EKG value, let's record some of our runtime configuration:
+      -- With our metrics/EKG value, let's record some of our runtime
+      -- configuration:
       EKG.createLabel (metricN "elasticsearch-url") metricsStore
         >>= flip Label.set (tshow $ elasticsearchUrl options)
 
@@ -212,11 +218,21 @@ main = do
       -- amend our HTTP value with the necessary options if so. From here on
       -- out, we use `esURI`, which should hold all the connection information
       -- for ES that we need like port, hostname, auth, etc.
+      --
+      -- `basicAuthUnsafe` looks scary, but without it, the code will actually
+      -- forbid sending HTTP basic auth credentials over non-SSL connections,
+      -- like in a local dev environment that may have authentication setup, but
+      -- no SSL.
+      -- TODO: maybe there can be a "production" compilation flag so it's
+      -- actually impossible to send credentials over plaintext connections?
       let reqAuth :: Option scheme
           reqAuth = case (esUsername vars, esPassword vars) of
             (Just u, Just p) -> basicAuthUnsafe (encodeUtf8 u) (encodeUtf8 p)
             _ -> mempty
           esURI = applyAuth parsedUrl
+                  -- This is a bit of a hacky workaround to account for `Req`
+                  -- enforcing the differences between HTTP and HTTPS at the
+                  -- type level.
                   where applyAuth :: ElasticsearchURI -> ElasticsearchURI
                         applyAuth (Left (u, o)) = Left (u, o <> reqAuth)
                         applyAuth (Right (u, o)) = Right (u, o <> reqAuth)
@@ -246,8 +262,11 @@ main = do
       let severityFilter = if logVerbose options then DebugS else InfoS
           -- Need this little function signature to help out the type checker
           logFormatter :: forall a. LogItem a => ItemFormatter a
-          logFormatter = if logFormat options == LogFormatJSON then jsonFormat else bracketFormat
-      handleScribe <- mkHandleScribeWithFormatter logFormatter ColorIfTerminal stderr (permitItem severityFilter) V2
+          logFormatter = if logFormat options == LogFormatJSON
+                         then jsonFormat
+                         else bracketFormat
+      handleScribe <- mkHandleScribeWithFormatter
+        logFormatter ColorIfTerminal stderr (permitItem severityFilter) V2
       let mkLogEnv = registerScribe "stderr" handleScribe defaultScribeSettings
                      =<< initLogEnv applicationName (appEnvironment vars)
       -- This nests everything that happens next underneath a context that has
@@ -256,7 +275,8 @@ main = do
       -- a block of code to run.
       bracket mkLogEnv closeScribes $ \le -> do
         -- This is our core datatype; our `App` that houses our logging hook,
-        -- configuration information, etc.
+        -- configuration information, etc. We can finally construct it here now
+        -- that we have a logging environment ready (`le`)
         let app = App
                   { appCli = options
                   , appEKG = metricsStore
@@ -273,9 +293,13 @@ main = do
         -- runs its main logic inside `runRIO`, which accepts our application
         -- environment as an argument, and everything after this point lives
         -- within `RIO`, so note that anything `IO`-related needs a `liftIO`.
+        --
+        -- In practice, doing this just means that we have a very easy way to
+        -- pull values out of our `App` value at any depth without needing to
+        -- pass dozens of arguments around - a `Reader`.
         runRIO app $ do
-          -- At this point our options are parsed and the API key is available, so
-          -- start executing some IO actions:
+          -- At this point our options are parsed and the API key is available,
+          -- so start executing some IO actions:
           --
           -- Create any necessary index templates.
           let bootstrap :: (Url scheme, Option scheme) -> RIO App IgnoreResponse
@@ -287,15 +311,19 @@ main = do
 
           -- Run the bootstrapping logic. Our HTTP request library will retry
           -- responses that make sense to retry, such as network timeouts, but
-          -- will fail and bailout for other response codes, like if our
-          -- request is malformed.
+          -- will fail and bailout for other response codes, like if our request
+          -- is malformed. This is another case where we dance around with
+          -- `either` in order to deal with 'Http and 'Https being different
+          -- types.
           resp <- tryAny (either bootstrap bootstrap esURI)
           case resp of
             Left e -> do
+              -- Being unable to talk to ES at all is bad, so we fail fast.
               logLocM ErrorS . ls $ tshow e
               exitFailure
             Right _r ->
-              logLocM DebugS . ls $ "Successfully created ES templates for " <> esIndex options
+              logLocM DebugS . ls $
+                "Successfully created ES templates for " <> esIndex options
 
           -- Because we support either timestamp-appended indices or automagic
           -- ILM index rollover, naming the index varies depending on whether
@@ -305,6 +333,9 @@ main = do
                 then
                   datePatternIndexName (esIndex options) (esDatePattern options)
                 else
+                  -- Because the index name is dynamic based on timestamp,
+                  -- `indexNamer` needs to be a function, but for ILM indices,
+                  -- the index name can be static, so we discard the argument.
                   (\_ -> IndexName (esIndex options))
 
           -- Create a gauge to measure our main application queue
