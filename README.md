@@ -94,7 +94,8 @@ The Stack Infrastructure team at Elastic has a tradition of naming some projects
 
 ## Wishlist
 
-Beefheart tries to avoid overly complex abstractions, so if you want to contribute, please do!
+Beefheart tries to avoid overly complex abstractions, so if you're new to the language and are itching to try some Haskell, please do!
+Contributions are welcome.
 Here are some ideas:
 
 - [ ] Standardized bracket or json log formatting everywhere in the code (for example, picking out any simple printed output)
