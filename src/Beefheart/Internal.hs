@@ -103,6 +103,11 @@ metricsRunner indexNamer service = katipAddNamespace "metrics" $ do
         logLocM WarningS . ls $ "Encountered connection timeout fetching metrics for '"
           <> serviceName <> "'. Retry attempt: " <> tshow (rsIterNumber retryStatus)
         return True
+      -- These sorts of exceptions often indicate a reset socket. Fine to retry.
+      (VanillaHttpException (HTTP.HttpExceptionRequest _request (HTTP.InternalException e))) -> do
+        logLocM WarningS . ls $ "Exception " <> tshow e <> " encountered for service '"
+          <> serviceName <> "'. Retry attempt: " <> tshow (rsIterNumber retryStatus)
+        return True
       e -> do
         logLocM WarningS . ls $ "Encountered a non-recoverable error. Bailing out: " <> tshow e
         return False
